@@ -1,9 +1,11 @@
 """
 app/core/config.py — Central Application Configuration
+All secrets MUST be set as environment variables.
+No hardcoded production credentials.
 """
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
-import os
 
 
 class Settings(BaseSettings):
@@ -13,27 +15,48 @@ class Settings(BaseSettings):
         "Cooperative Gig Services Platform for Household & Community Services - "
         "SIH 2026 Problem Statement 26089"
     )
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+psycopg://postgres:sih2025admin@localhost:5432/gig_services"
-    )
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "sih2026_super_secret_jwt_key_cooperative_gig_platform_secure_hash_key_987654321")
+
+    # ── Database ────────────────────────────────────────────
+    # REQUIRED on Render — set via Environment Variables dashboard
+    DATABASE_URL: str
+
+    # ── JWT Security ────────────────────────────────────────
+    # REQUIRED on Render — set via Environment Variables dashboard
+    SECRET_KEY: str
+
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
-    CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:8080",
-        "http://localhost:8000",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:8080",
-        "http://127.0.0.1:8000",
-        "*"
-    ]
+    # ── Environment ─────────────────────────────────────────
+    ENVIRONMENT: str = "production"
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # ── CORS ────────────────────────────────────────────────
+    # Comma-separated list of allowed origins, e.g.:
+    # ALLOWED_ORIGINS=https://myapp.vercel.app,https://myapp.com
+    # Defaults to permissive localhost dev origins only.
+    ALLOWED_ORIGINS: str = (
+        "http://localhost:3000,"
+        "http://localhost:5173,"
+        "http://localhost:8080,"
+        "http://localhost:8000,"
+        "http://127.0.0.1:3000,"
+        "http://127.0.0.1:5173,"
+        "http://127.0.0.1:8080,"
+        "http://127.0.0.1:8000"
+    )
+
+    @property
+    def CORS_ORIGINS(self) -> List[str]:
+        """Parse comma-separated ALLOWED_ORIGINS into a list."""
+        raw = self.ALLOWED_ORIGINS
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        return origins
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()
