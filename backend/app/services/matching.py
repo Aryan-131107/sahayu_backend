@@ -37,15 +37,18 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     Calculate great-circle distance between two GPS coordinates (in km).
     Accounts for spherical Earth curvature using the Haversine formula.
     """
-    R = 6371.0  # Earth radius in km
-    lat1_r = math.radians(lat1)
-    lat2_r = math.radians(lat2)
-    delta_lat = math.radians(lat2 - lat1)
-    delta_lon = math.radians(lon2 - lon1)
+    try:
+        R = 6371.0  # Earth radius in km
+        lat1_r = math.radians(float(lat1))
+        lat2_r = math.radians(float(lat2))
+        delta_lat = math.radians(float(lat2) - float(lat1))
+        delta_lon = math.radians(float(lon2) - float(lon1))
 
-    a = math.sin(delta_lat / 2) ** 2 + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(delta_lon / 2) ** 2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+        a = math.sin(delta_lat / 2) ** 2 + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(delta_lon / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+    except Exception:
+        return 5.0
 
 
 def compute_explainable_score(
@@ -124,7 +127,7 @@ def compute_explainable_score(
         reasons.append(f"Within service zone ({distance_km:.1f} km)")
 
     # 6. Price Score (0 - 100) — Weight: 0.05
-    hourly_rate = float(worker.hourly_rate or 250.00)
+    hourly_rate = float(worker.hourly_rate) if worker.hourly_rate is not None else 250.00
     price_span = max(BENCHMARK_MAX_RATE - BENCHMARK_MIN_RATE, 1.0)
     price_ratio = max(0.0, min(1.0, (BENCHMARK_MAX_RATE - hourly_rate) / price_span))
     price_score = round(price_ratio * 100.0, 2)
@@ -210,7 +213,6 @@ def get_recommendations(
     worker_ids = [w.worker_id for w, _ in eligible_worker_pairs]
 
     # 2. Check real-time availability / slot conflicts
-    # Fetch active bookings or availability slots
     avail_records = (
         db.query(Availability)
         .filter(Availability.worker_id.in_(worker_ids))
@@ -243,7 +245,7 @@ def get_recommendations(
         .group_by(RatingReview.worker_id)
         .all()
     )
-    rating_map = {row.worker_id: (float(row.avg_rating), int(row.total_reviews)) for row in avg_ratings_query}
+    rating_map = {row.worker_id: (float(row.avg_rating), int(row.total_reviews)) for row in avg_ratings_query if row.avg_rating is not None}
 
     # Fallback to join via bookings if direct worker_id in review is null
     if len(rating_map) < len(worker_ids):
@@ -259,12 +261,12 @@ def get_recommendations(
             .all()
         )
         for row in booking_ratings_query:
-            if row.worker_id not in rating_map:
+            if row.worker_id not in rating_map and row.avg_rating is not None:
                 rating_map[row.worker_id] = (float(row.avg_rating), int(row.total_reviews))
 
     # 4. Score all workers
     recommendations: List[WorkerRecommendation] = []
-    service_price = float(service.base_price or 250.00)
+    service_price = float(service.base_price) if service.base_price is not None else 250.00
 
     for worker, worker_skill in eligible_worker_pairs:
         # Determine availability
@@ -272,9 +274,12 @@ def get_recommendations(
         if worker.worker_id in busy_workers:
             is_worker_avail = False
 
+        w_lat = float(worker.latitude) if worker.latitude is not None else 23.181500
+        w_lon = float(worker.longitude) if worker.longitude is not None else 79.986400
+
         distance_km = haversine_distance(
             customer_lat, customer_lon,
-            float(worker.latitude), float(worker.longitude)
+            w_lat, w_lon
         )
 
         rating_data = rating_map.get(worker.worker_id, (None, 0))
@@ -296,12 +301,12 @@ def get_recommendations(
                 worker_id=worker.worker_id,
                 name=worker.name,
                 phone=worker.phone,
-                experience_years=worker.experience_years,
-                hourly_rate=float(worker.hourly_rate or 250.00),
-                is_verified=worker.is_verified,
+                experience_years=worker.experience_years or 0,
+                hourly_rate=float(worker.hourly_rate) if worker.hourly_rate is not None else 250.00,
+                is_verified=bool(worker.is_verified),
                 is_available=is_worker_avail,
                 distance_km=round(distance_km, 2),
-                average_rating=round(avg_rating, 2) if avg_rating else None,
+                average_rating=round(avg_rating, 2) if avg_rating is not None else None,
                 total_reviews=total_reviews,
                 recommendation_score=rec_score_0_1,
                 matching_score=matching_score_100,

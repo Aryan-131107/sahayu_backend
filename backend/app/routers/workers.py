@@ -19,7 +19,7 @@ router = APIRouter(prefix="/workers", tags=["Workers"])
 
 
 def _format_worker_response(worker: WorkerData, db: Session) -> WorkerResponse:
-    """Helper to populate worker skills and rating statistics."""
+    """Helper to populate worker skills and rating statistics defensively."""
     # Query worker skills
     skills_data = (
         db.query(WorkerSkill, Skill)
@@ -46,8 +46,8 @@ def _format_worker_response(worker: WorkerData, db: Session) -> WorkerResponse:
         .filter(RatingReview.worker_id == worker.worker_id)
         .first()
     )
-    avg_rating = float(rating_stats.avg_rating) if rating_stats and rating_stats.avg_rating else None
-    total_reviews = int(rating_stats.total_reviews) if rating_stats and rating_stats.total_reviews else 0
+    avg_rating = float(rating_stats.avg_rating) if rating_stats and rating_stats.avg_rating is not None else None
+    total_reviews = int(rating_stats.total_reviews) if rating_stats and rating_stats.total_reviews is not None else 0
 
     return WorkerResponse(
         worker_id=worker.worker_id,
@@ -56,16 +56,16 @@ def _format_worker_response(worker: WorkerData, db: Session) -> WorkerResponse:
         email=worker.email,
         experience_years=worker.experience_years or 0,
         experience=worker.experience_years or 0,
-        hourly_rate=float(worker.hourly_rate or 250.00),
+        hourly_rate=float(worker.hourly_rate) if worker.hourly_rate is not None else 250.00,
         address=worker.address,
         city=worker.city,
-        latitude=float(worker.latitude),
-        longitude=float(worker.longitude),
-        is_verified=worker.is_verified,
-        verification_status=worker.is_verified,
-        is_active=worker.is_active,
+        latitude=float(worker.latitude) if worker.latitude is not None else 23.181500,
+        longitude=float(worker.longitude) if worker.longitude is not None else 79.986400,
+        is_verified=bool(worker.is_verified),
+        verification_status=bool(worker.is_verified),
+        is_active=bool(worker.is_active),
         skills=formatted_skills,
-        average_rating=round(avg_rating, 2) if avg_rating else None,
+        average_rating=round(avg_rating, 2) if avg_rating is not None else None,
         total_reviews=total_reviews,
         created_at=worker.created_at,
     )

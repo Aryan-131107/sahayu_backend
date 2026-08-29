@@ -44,14 +44,18 @@ def create_review(
     if not booking:
         raise HTTPException(status_code=404, detail=f"Booking {payload.booking_id} not found.")
 
-    # 2. Customer match
-    if booking.customer_id != payload.customer_id:
+    # 2. Customer match & resolution
+    target_customer_id = payload.customer_id
+    if not target_customer_id and current_user and current_user.role == "customer":
+        target_customer_id = current_user.id
+
+    if target_customer_id is not None and booking.customer_id != target_customer_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only submit reviews for your own bookings."
         )
 
-    if current_user and current_user.role == "customer" and current_user.id != payload.customer_id:
+    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authenticated customer identity does not match review author."

@@ -2,12 +2,12 @@
 migrate_to_supabase.py — Supabase Database Migration & Verification Utility
 
 Usage:
-  1. Set your Supabase connection string:
-       Windows PowerShell:
-         $env:SUPABASE_DATABASE_URL = "postgresql+psycopg://postgres.[PROJECT_REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres"
-         python migrate_to_supabase.py
+  1. Set your Supabase connection string in PowerShell or bash:
+       $env:SUPABASE_DATABASE_URL = "postgresql+psycopg://postgres.[PROJECT_REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres"
+       python migrate_to_supabase.py
 
-  2. Or provide it interactively when prompted.
+  2. Or run it interactively:
+       python migrate_to_supabase.py
 """
 import os
 import sys
@@ -26,11 +26,10 @@ def run_migration(target_db_url: str):
             version = conn.execute(text("SELECT version()")).scalar()
             print(f"[OK] Supabase connected successfully: {str(version)[:60]}...")
 
-        # Recreate tables in Supabase
-        print("[*] Creating 8 database tables and relationships in Supabase...")
-        Base.metadata.drop_all(bind=engine)
+        # Create tables if not present without dropping existing tables
+        print("[*] Verifying/creating 8 database tables in Supabase...")
         Base.metadata.create_all(bind=engine)
-        print("[OK] Tables created: customer_data, worker_data, skills, workers_skill, availability, services, bookings, ratings_reviews")
+        print("[OK] Tables verified: customer_data, worker_data, skills, workers_skill, availability, services, bookings, ratings_reviews")
 
         # Reconnect backend database engine with target url to seed
         os.environ["DATABASE_URL"] = target_db_url
@@ -56,7 +55,7 @@ if __name__ == "__main__":
     supabase_url = os.getenv("SUPABASE_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not supabase_url or "localhost" in supabase_url:
         print("\n========================================================")
-        print("   Sahāyu Supabase PostgreSQL Migration Utility")
+        print("   Sahayu Supabase PostgreSQL Migration Utility")
         print("========================================================")
         print("Enter your Supabase PostgreSQL connection string.")
         print("Format: postgresql+psycopg://postgres.[PROJECT_REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres")

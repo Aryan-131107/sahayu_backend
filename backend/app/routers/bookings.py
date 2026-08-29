@@ -46,6 +46,11 @@ def _validate_booking_transition(current: str, target: str) -> None:
 
 
 def _format_booking_response(b: Booking) -> BookingResponse:
+    amount_val = float(b.amount) if b.amount is not None else 0.0
+    est_price_val = float(b.estimated_price) if b.estimated_price is not None else amount_val
+    lat_val = float(b.service_lat) if b.service_lat is not None else None
+    lon_val = float(b.service_lon) if b.service_lon is not None else None
+
     return BookingResponse(
         booking_id=b.booking_id,
         customer_id=b.customer_id,
@@ -55,10 +60,10 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         start_time=b.start_time,
         address=b.address,
         description=b.description,
-        amount=float(b.amount),
-        estimated_price=float(b.estimated_price) if b.estimated_price else float(b.amount),
-        service_lat=float(b.service_lat) if b.service_lat else None,
-        service_lon=float(b.service_lon) if b.service_lon else None,
+        amount=amount_val,
+        estimated_price=est_price_val,
+        service_lat=lat_val,
+        service_lon=lon_val,
         status=b.status,
         payment_status=b.payment_status,
         created_at=b.created_at,
