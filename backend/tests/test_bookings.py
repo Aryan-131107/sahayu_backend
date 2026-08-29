@@ -11,7 +11,6 @@ client = TestClient(app)
 
 def test_create_booking_success():
     """Create a new pending booking with valid skill match."""
-    # Worker 1 is an Electrician (skill_id 1), Service 1 requires Electrician
     future_date = (date.today() + timedelta(days=15)).isoformat()
     payload = {
         "customer_id": 1,
@@ -29,6 +28,64 @@ def test_create_booking_success():
     assert data["status"] == "PENDING"
     assert data["payment_status"] == "PENDING"
     assert data["amount"] == 250.00
+
+
+def test_create_booking_authenticated_customer_auto_id():
+    """Customer can create booking with JWT without passing customer_id."""
+    login_resp = client.post("/auth/login", json={
+        "email": "customer@example.com",
+        "password": "Password123!",
+    })
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    future_date = (date.today() + timedelta(days=18)).isoformat()
+    payload = {
+        "worker_id": 1,
+        "service_id": 1,
+        "booking_date": future_date,
+        "start_time": "16:00:00",
+        "amount": 250.00,
+    }
+    resp = client.post("/bookings", json=payload, headers=headers)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["customer_id"] == 1
+    assert data["status"] == "PENDING"
+
+
+def test_get_my_customer_bookings():
+    """GET /bookings/customer/me returns authenticated customer's bookings."""
+    login_resp = client.post("/auth/login", json={
+        "email": "customer@example.com",
+        "password": "Password123!",
+    })
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.get("/bookings/customer/me", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    for b in data:
+        assert b["customer_id"] == 1
+
+
+def test_get_my_worker_bookings():
+    """GET /bookings/worker/me returns authenticated worker's bookings."""
+    login_resp = client.post("/auth/login", json={
+        "email": "worker@example.com",
+        "password": "Password123!",
+    })
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.get("/bookings/worker/me", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    for b in data:
+        assert b["worker_id"] == 1
 
 
 def test_double_booking_guard():
@@ -64,7 +121,6 @@ def test_double_booking_guard():
 
 def test_booking_skill_mismatch_rejected():
     """Reject booking when worker does not possess required skill for service."""
-    # Worker 2 is a Plumber (skill 2), Service 6 requires Painter (skill 4)
     payload = {
         "customer_id": 1,
         "worker_id": 2,
@@ -82,7 +138,6 @@ def test_booking_full_lifecycle_and_side_effects():
     PENDING → ACCEPTED (locks availability) → IN_PROGRESS → COMPLETED (frees availability & marks PAID)
     """
     target_date = (date.today() + timedelta(days=25)).isoformat()
-    # Create booking for Worker 3 (Carpenter, service 5)
     create_resp = client.post("/api/bookings", json={
         "customer_id": 1,
         "worker_id": 3,
@@ -151,7 +206,6 @@ def test_booking_cancellation_flow():
 
 def test_invalid_state_transition_from_completed():
     """Cannot accept or cancel a COMPLETED booking."""
-    # Booking 1 is COMPLETED from seed data
     resp = client.patch("/api/bookings/1/accept")
     assert resp.status_code == 409
     assert "Cannot transition" in resp.json()["detail"]

@@ -13,7 +13,7 @@ from app.schemas import (
     AvailabilityUpdate, AvailabilityResponse, RecommendationResponse
 )
 from app.services.matching import get_recommendations
-from app.core.auth import get_current_user, get_optional_current_user, AuthUser
+from app.core.auth import get_current_user, get_optional_current_user, require_worker, AuthUser
 
 router = APIRouter(prefix="/workers", tags=["Workers"])
 
@@ -160,6 +160,25 @@ def recommend_workers(
         total_found=len(recommendations),
         recommendations=recommendations,
     )
+
+
+@router.get(
+    "/me",
+    response_model=WorkerResponse,
+    summary="Get current authenticated worker profile",
+)
+def get_current_worker(
+    current_user: AuthUser = Depends(require_worker),
+    db: Session = Depends(get_db),
+):
+    """Retrieve the logged-in worker's profile using JWT authentication."""
+    worker = db.get(WorkerData, current_user.id)
+    if not worker:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Worker account not found.",
+        )
+    return _format_worker_response(worker, db)
 
 
 @router.get(

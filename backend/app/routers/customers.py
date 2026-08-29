@@ -1,12 +1,13 @@
 """
 routers/customers.py — Customer Management Endpoints
 """
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import CustomerData
 from app.schemas import CustomerCreate, CustomerUpdate, CustomerResponse
-from app.core.auth import get_current_user, get_optional_current_user, AuthUser
+from app.core.auth import get_current_user, get_optional_current_user, require_customer, AuthUser
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
 
@@ -41,6 +42,25 @@ def create_customer(payload: CustomerCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_customer)
     return new_customer
+
+
+@router.get(
+    "/me",
+    response_model=CustomerResponse,
+    summary="Get current authenticated customer profile",
+)
+def get_current_customer(
+    current_user: AuthUser = Depends(require_customer),
+    db: Session = Depends(get_db),
+):
+    """Retrieve the logged-in customer's profile using JWT authentication."""
+    customer = db.get(CustomerData, current_user.id)
+    if not customer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer account not found.",
+        )
+    return customer
 
 
 @router.get(

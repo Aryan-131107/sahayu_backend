@@ -16,7 +16,7 @@ from sqlalchemy import func
 from app.database import get_db
 from app.models import Booking, WorkerData, CustomerData, Service, WorkerSkill, Availability
 from app.schemas import BookingCreate, BookingResponse
-from app.core.auth import get_optional_current_user, AuthUser
+from app.core.auth import get_optional_current_user, require_customer, require_worker, AuthUser
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 
@@ -81,17 +81,24 @@ def create_booking(
 ):
     """
     Create a new booking with comprehensive validation:
-    1. Customer validation
+    1. Customer validation (auto-resolved from JWT if omitted)
     2. Worker validation & active check
     3. Service validation & Skill alignment check
     4. Double Booking Guard: Rejects overlapping slots for the same worker
     """
-    # 1. Validate customer
-    customer = db.get(CustomerData, payload.customer_id)
-    if not customer:
-        raise HTTPException(status_code=404, detail=f"Customer {payload.customer_id} not found.")
+    # 1. Resolve & Validate customer
+    target_customer_id = payload.customer_id
+    if not target_customer_id:
+        if current_user and current_user.role == "customer":
+            target_customer_id = current_user.id
+        else:
+            raise HTTPException(status_code=400, detail="customer_id is required or user must be logged in as customer.")
 
-    if current_user and current_user.role == "customer" and current_user.id != payload.customer_id:
+    customer = db.get(CustomerData, target_customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail=f"Customer {target_customer_id} not found.")
+
+    if current_user and current_user.role == "customer" and current_user.id != target_customer_id:
         raise HTTPException(status_code=403, detail="Cannot create bookings on behalf of another customer.")
 
     # 2. Validate worker
@@ -149,7 +156,7 @@ def create_booking(
 
     # Create Booking
     booking = Booking(
-        customer_id=payload.customer_id,
+        customer_id=target_customer_id,
         worker_id=payload.worker_id,
         service_id=payload.service_id,
         booking_date=target_date,
@@ -170,25 +177,57 @@ def create_booking(
 
 
 @router.get(
-    "/{booking_id}",
-    response_model=BookingResponse,
-    summary="Get single booking by ID",
+    "/customer/me",
+    response_model=List[BookingResponse],
+    summary="Get booking history for currently logged-in customer",
 )
-def get_booking(booking_id: int, db: Session = Depends(get_db)):
-    """Retrieve full booking details."""
-    booking = (
+def get_my_customer_bookings(
+    status_filter: Optional[str] = Query(None, description="Optional status filter"),
+    current_user: AuthUser = Depends(require_customer),
+    db: Session = Depends(get_db),
+):
+    """Retrieve all bookings of the currently authenticated customer."""
+    query = (
         db.query(Booking)
         .options(
             joinedload(Booking.customer),
             joinedload(Booking.worker),
             joinedload(Booking.service),
         )
-        .filter(Booking.booking_id == booking_id)
-        .first()
+        .filter(Booking.customer_id == current_user.id)
     )
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-    return _format_booking_response(booking)
+    if status_filter:
+        query = query.filter(func.upper(Booking.status) == status_filter.upper())
+
+    bookings = query.order_by(Booking.booking_id.desc()).all()
+    return [_format_booking_response(b) for b in bookings]
+
+
+@router.get(
+    "/worker/me",
+    response_model=List[BookingResponse],
+    summary="Get booking feed for currently logged-in worker",
+)
+def get_my_worker_bookings(
+    status_filter: Optional[str] = Query(None, description="Optional status filter"),
+    current_user: AuthUser = Depends(require_worker),
+    db: Session = Depends(get_db),
+):
+    """Retrieve all bookings assigned to the currently authenticated worker."""
+    query = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.customer),
+            joinedload(Booking.worker),
+            joinedload(Booking.service),
+        )
+        .filter(Booking.worker_id == current_user.id)
+    )
+    if status_filter:
+        query = query.filter(func.upper(Booking.status) == status_filter.upper())
+
+    bookings = query.order_by(Booking.booking_id.desc()).all()
+    return [_format_booking_response(b) for b in bookings]
 
 
 @router.get(
@@ -251,6 +290,28 @@ def get_worker_bookings(
 
     bookings = query.order_by(Booking.booking_id.desc()).all()
     return [_format_booking_response(b) for b in bookings]
+
+
+@router.get(
+    "/{booking_id}",
+    response_model=BookingResponse,
+    summary="Get single booking by ID",
+)
+def get_booking(booking_id: int, db: Session = Depends(get_db)):
+    """Retrieve full booking details."""
+    booking = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.customer),
+            joinedload(Booking.worker),
+            joinedload(Booking.service),
+        )
+        .filter(Booking.booking_id == booking_id)
+        .first()
+    )
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+    return _format_booking_response(booking)
 
 
 @router.patch(

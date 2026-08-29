@@ -11,6 +11,21 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 # AUTH SCHEMAS
 # ─────────────────────────────────────────────────────────
 
+class RegisterRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=150, examples=["Rahul Verma"])
+    phone: str = Field(..., min_length=10, max_length=20, examples=["9876543210"])
+    email: str = Field(..., max_length=150, examples=["user@example.com"])
+    password: str = Field(..., min_length=6, examples=["Password123!"])
+    role: str = Field("customer", description="'customer' or 'worker'", examples=["customer"])
+    experience_years: Optional[int] = Field(0, ge=0, examples=[5])
+    hourly_rate: Optional[float] = Field(250.00, gt=0, examples=[300.00])
+    address: Optional[str] = Field(None, examples=["Civil Lines, Jabalpur"])
+    city: Optional[str] = Field("Jabalpur", examples=["Jabalpur"])
+    latitude: Optional[float] = Field(23.181500, examples=[23.181500])
+    longitude: Optional[float] = Field(79.986400, examples=[79.986400])
+    skill_ids: Optional[List[int]] = Field(default=[], examples=[[1, 2]])
+
+
 class CustomerRegister(BaseModel):
     name: str = Field(..., min_length=2, max_length=100, examples=["Rahul Verma"])
     phone: str = Field(..., min_length=10, max_length=20, examples=["9876543210"])
@@ -118,7 +133,6 @@ class ServiceResponse(BaseModel):
     @field_validator("service", mode="before")
     @classmethod
     def set_service_alias(cls, v, info):
-        # Fallback for backward compatibility
         return v or info.data.get("service_name")
 
 
@@ -231,7 +245,7 @@ class AvailabilityResponse(BaseModel):
 # ─────────────────────────────────────────────────────────
 
 class BookingCreate(BaseModel):
-    customer_id: int = Field(..., examples=[1])
+    customer_id: Optional[int] = Field(None, examples=[1])
     worker_id: int = Field(..., examples=[1])
     service_id: int = Field(..., examples=[1])
     booking_date: Optional[date] = Field(None, examples=["2026-08-28"])
@@ -272,7 +286,7 @@ class BookingResponse(BaseModel):
 
 class ReviewCreate(BaseModel):
     booking_id: int = Field(..., examples=[1])
-    customer_id: int = Field(..., description="Must match customer on booking", examples=[1])
+    customer_id: Optional[int] = Field(None, description="Must match customer on booking", examples=[1])
     rating: float = Field(..., ge=1.0, le=5.0, examples=[4.5])
     review: Optional[str] = Field(None, max_length=500, examples=["Punctual and very neat repair work!"])
 

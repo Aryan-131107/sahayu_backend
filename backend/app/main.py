@@ -100,7 +100,8 @@ def api_health_check():
 
 app.include_router(api_router)
 
-# ── Direct Root Routes (Backwards Compatibility) ─────────────────────
+# ── Direct Root Routes (Backwards Compatibility & Direct Access) ─────
+app.include_router(auth.router)
 app.include_router(customers.router)
 app.include_router(workers.router)
 app.include_router(services.router)
