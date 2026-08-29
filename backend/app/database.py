@@ -1,68 +1,51 @@
 """
 database.py — SQLAlchemy 2.0 database connection and session management.
 
-HOW IT WORKS:
-  1. We read DATABASE_URL from the .env file (never hardcoded).
-  2. We create an Engine — the core connection pool to PostgreSQL.
-  3. We create a SessionLocal factory — each request gets its own session.
-  4. get_db() is a FastAPI dependency that yields a session, then closes it.
-
-USAGE IN ROUTERS:
-  from app.database import get_db
-  from sqlalchemy.orm import Session
-  from fastapi import Depends
-
-  @router.get("/example")
-  def my_endpoint(db: Session = Depends(get_db)):
-      result = db.execute(text("SELECT ...")).fetchall()
-      return result
+Features:
+  - Reads DATABASE_URL through the central settings/environment system.
+  - No hardcoded database credentials.
+  - Works seamlessly both with local .env files and production Render environment variables.
+  - Automatically compatible with SQLAlchemy 2.0 and psycopg3.
 """
 
+import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from dotenv import load_dotenv
-import os
+from app.core.config import settings
 
-# Load environment variables from .env file
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = settings.DATABASE_URL
 
 if not DATABASE_URL:
     raise RuntimeError(
-        "DATABASE_URL is not set. "
-        "Please copy .env.example to .env and fill in your credentials."
+        "DATABASE_URL is not set. Please set the DATABASE_URL environment variable "
+        "(e.g. in your Render dashboard or local .env file)."
     )
 
-# Create the SQLAlchemy engine.
-# - pool_pre_ping=True: checks connection health before use (handles stale connections).
-# - echo=False: set to True to log all SQL queries for debugging.
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
+# Create the SQLAlchemy engine using psycopg3
+# - pool_pre_ping=True: checks connection health before use (handles idle/stale pool connections).
+# - echo=False: set to True if SQL query logging is needed for debugging.
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    echo=False,
+)
 
-# SessionLocal is a factory. Calling SessionLocal() creates a new DB session.
+# SessionLocal factory for request-scoped database sessions
 SessionLocal = sessionmaker(
     bind=engine,
-    autocommit=False,  # We control transactions manually
-    autoflush=False,   # We flush manually before commits
+    autocommit=False,
+    autoflush=False,
 )
 
 
-# Base class for all SQLAlchemy ORM models (Phase 3)
+# Base class for SQLAlchemy ORM models
 class Base(DeclarativeBase):
     pass
 
 
 def get_db():
     """
-    FastAPI dependency that provides a database session per request.
-
-    Usage:
-        @router.get("/something")
-        def endpoint(db: Session = Depends(get_db)):
-            ...
-
-    The 'yield' ensures the session is always closed after the request,
-    even if an exception occurs.
+    FastAPI dependency that yields a database session per request and ensures cleanup.
     """
     db = SessionLocal()
     try:
@@ -73,8 +56,7 @@ def get_db():
 
 def verify_connection():
     """
-    Utility: Test that the database connection is healthy.
-    Called at application startup.
+    Test database connection health. Called during application startup lifecycle.
     """
     with engine.connect() as conn:
         result = conn.execute(text("SELECT version()")).scalar()

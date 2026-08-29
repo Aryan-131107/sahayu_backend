@@ -1,11 +1,12 @@
 """
 app/core/config.py — Central Application Configuration
-All secrets MUST be set as environment variables.
-No hardcoded production credentials.
+All configuration values are read from environment variables (with local .env support).
+No hardcoded secrets or production credentials.
 """
 import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -16,12 +17,12 @@ class Settings(BaseSettings):
         "SIH 2026 Problem Statement 26089"
     )
 
-    # ── Database ────────────────────────────────────────────
-    # REQUIRED on Render — set via Environment Variables dashboard
+    # ── Database Configuration ──────────────────────────────
+    # Required in production / Render — supplied via environment variable
     DATABASE_URL: str
 
-    # ── JWT Security ────────────────────────────────────────
-    # REQUIRED on Render — set via Environment Variables dashboard
+    # ── Security / JWT Configuration ────────────────────────
+    # Required in production / Render — supplied via environment variable
     SECRET_KEY: str
 
     ALGORITHM: str = "HS256"
@@ -30,10 +31,7 @@ class Settings(BaseSettings):
     # ── Environment ─────────────────────────────────────────
     ENVIRONMENT: str = "production"
 
-    # ── CORS ────────────────────────────────────────────────
-    # Comma-separated list of allowed origins, e.g.:
-    # ALLOWED_ORIGINS=https://myapp.vercel.app,https://myapp.com
-    # Defaults to permissive localhost dev origins only.
+    # ── CORS Origins ────────────────────────────────────────
     ALLOWED_ORIGINS: str = (
         "http://localhost:3000,"
         "http://localhost:5173,"
@@ -45,12 +43,39 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8000"
     )
 
+    @field_validator("DATABASE_URL", mode="after")
+    @classmethod
+    def normalize_database_url(cls, v: str) -> str:
+        """
+        Normalize standard PostgreSQL URLs to psycopg3 dialect.
+        Ensures compatibility if Render or Supabase supplies postgres:// or postgresql://.
+        """
+        if not v or not v.strip():
+            raise ValueError(
+                "DATABASE_URL is not set. Please set the DATABASE_URL environment variable "
+                "(e.g. postgresql+psycopg://user:password@host:5432/dbname)."
+            )
+        v = v.strip()
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql+psycopg://", 1)
+        elif v.startswith("postgresql://") and not v.startswith("postgresql+psycopg://"):
+            v = v.replace("postgresql://", "postgresql+psycopg://", 1)
+        return v
+
+    @field_validator("SECRET_KEY", mode="after")
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError(
+                "SECRET_KEY is not set. Please set the SECRET_KEY environment variable for JWT security."
+            )
+        return v.strip()
+
     @property
     def CORS_ORIGINS(self) -> List[str]:
-        """Parse comma-separated ALLOWED_ORIGINS into a list."""
+        """Parse comma-separated ALLOWED_ORIGINS string into a list."""
         raw = self.ALLOWED_ORIGINS
-        origins = [o.strip() for o in raw.split(",") if o.strip()]
-        return origins
+        return [o.strip() for o in raw.split(",") if o.strip()]
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -59,4 +84,5 @@ class Settings(BaseSettings):
     )
 
 
+# Instantiate central application settings
 settings = Settings()

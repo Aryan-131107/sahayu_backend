@@ -8,9 +8,9 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        sync: false          # Set manually in Render dashboard — paste your Supabase/Render PostgreSQL URL
+        sync: false          # Supplied in Render Environment Variables tab
       - key: SECRET_KEY
-        generateValue: true  # Render auto-generates a strong random secret
+        sync: false          # Supplied in Render Environment Variables tab
       - key: APP_TITLE
         value: "Cooperative Gig Services API"
       - key: APP_VERSION
@@ -18,4 +18,4 @@ services:
       - key: ENVIRONMENT
         value: "production"
       - key: ALLOWED_ORIGINS
-        sync: false          # Set to your frontend URL e.g. https://yourapp.vercel.app
+        sync: false          # Optional: Add frontend URLs e.g. https://sahayu.vercel.app
