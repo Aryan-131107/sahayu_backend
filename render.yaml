@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: sih-cooperative-gig-api
+    runtime: python
+    buildCommand: "cd backend && pip install -r requirements.txt && python seed.py"
+    startCommand: "cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gig_services_db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: APP_TITLE
+        value: "Cooperative Gig Services API"
+      - key: APP_VERSION
+        value: "1.0.0"
+
+databases:
+  - name: gig_services_db
+    databaseName: gig_services
+    user: postgres
+    plan: free
