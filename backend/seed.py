@@ -132,6 +132,7 @@ def seed_database():
 
         cust_objs = []
         cust_added = 0
+        cust_pwd_fixed = 0
         for name, phone, email, addr, city, lat, lon in customers_data:
             existing = db.query(CustomerData).filter(
                 (func.lower(CustomerData.email) == email.lower()) | (CustomerData.phone == phone)
@@ -152,10 +153,16 @@ def seed_database():
                 cust_objs.append(c)
                 cust_added += 1
             else:
+                # Always ensure existing demo accounts have a valid bcrypt hash
+                pw = existing.password_hash or ""
+                if not (pw.startswith("$2b$") or pw.startswith("$2a$")):
+                    existing.password_hash = hashed_pwd
+                    cust_pwd_fixed += 1
                 cust_objs.append(existing)
 
         db.commit()
-        print(f"[OK] Customers ready: {len(cust_objs)} total ({cust_added} newly added).")
+        print(f"[OK] Customers ready: {len(cust_objs)} total ({cust_added} newly added, {cust_pwd_fixed} passwords fixed).")
+
 
         # ─────────────────────────────────────────────────────
         # 4. SEED WORKERS & SKILLS (20 Accounts)
@@ -186,6 +193,7 @@ def seed_database():
 
         worker_objs = []
         workers_added = 0
+        workers_pwd_fixed = 0
         for name, phone, email, exp, rate, addr, city, lat, lon, verified, active, skills_list in workers_data:
             existing = db.query(WorkerData).filter(
                 (func.lower(WorkerData.email) == email.lower()) | (WorkerData.phone == phone)
@@ -230,10 +238,16 @@ def seed_database():
                 )
                 db.add(avail)
             else:
+                # Always ensure existing demo accounts have a valid bcrypt hash
+                pw = existing.password_hash or ""
+                if not (pw.startswith("$2b$") or pw.startswith("$2a$")):
+                    existing.password_hash = hashed_pwd
+                    workers_pwd_fixed += 1
                 worker_objs.append(existing)
 
         db.commit()
-        print(f"[OK] Workers ready: {len(worker_objs)} total ({workers_added} newly added).")
+        print(f"[OK] Workers ready: {len(worker_objs)} total ({workers_added} newly added, {workers_pwd_fixed} passwords fixed).")
+
 
         # ─────────────────────────────────────────────────────
         # 5. SEED BOOKINGS & REVIEWS
