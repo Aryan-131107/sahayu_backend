@@ -153,15 +153,15 @@ def seed_database():
                 cust_objs.append(c)
                 cust_added += 1
             else:
-                # Always ensure existing demo accounts have a valid bcrypt hash
-                pw = existing.password_hash or ""
-                if not (pw.startswith("$2b$") or pw.startswith("$2a$")):
-                    existing.password_hash = hashed_pwd
-                    cust_pwd_fixed += 1
+                # Always regenerate password_hash using this runtime's bcrypt.
+                # A hash generated on a different machine/Python/bcrypt version may not
+                # verify correctly on the deployment target (e.g., Render ARM64 Linux).
+                existing.password_hash = hashed_pwd
+                cust_pwd_fixed += 1
                 cust_objs.append(existing)
 
         db.commit()
-        print(f"[OK] Customers ready: {len(cust_objs)} total ({cust_added} newly added, {cust_pwd_fixed} passwords fixed).")
+        print(f"[OK] Customers ready: {len(cust_objs)} total ({cust_added} newly added, {cust_pwd_fixed} password hashes refreshed).")
 
 
         # ─────────────────────────────────────────────────────
@@ -238,15 +238,15 @@ def seed_database():
                 )
                 db.add(avail)
             else:
-                # Always ensure existing demo accounts have a valid bcrypt hash
-                pw = existing.password_hash or ""
-                if not (pw.startswith("$2b$") or pw.startswith("$2a$")):
-                    existing.password_hash = hashed_pwd
-                    workers_pwd_fixed += 1
+                # Always regenerate password_hash using this runtime's bcrypt.
+                # A hash generated on a different machine/Python/bcrypt version may not
+                # verify correctly on the deployment target (e.g., Render ARM64 Linux).
+                existing.password_hash = hashed_pwd
+                workers_pwd_fixed += 1
                 worker_objs.append(existing)
 
         db.commit()
-        print(f"[OK] Workers ready: {len(worker_objs)} total ({workers_added} newly added, {workers_pwd_fixed} passwords fixed).")
+        print(f"[OK] Workers ready: {len(worker_objs)} total ({workers_added} newly added, {workers_pwd_fixed} password hashes refreshed).")
 
 
         # ─────────────────────────────────────────────────────

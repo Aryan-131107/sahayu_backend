@@ -10,6 +10,12 @@ client = TestClient(app)
 
 def test_unified_register_customer_success():
     """POST /auth/register creates customer and returns valid JWT."""
+    from app.database import SessionLocal
+    from app.models import CustomerData
+    with SessionLocal() as db:
+        db.query(CustomerData).filter(CustomerData.email == "unified.customer@example.com").delete()
+        db.commit()
+
     payload = {
         "name": "Unified Customer",
         "phone": "9998880010",
@@ -29,6 +35,12 @@ def test_unified_register_customer_success():
 
 def test_unified_register_worker_success():
     """POST /auth/register creates worker with skills and returns valid JWT."""
+    from app.database import SessionLocal
+    from app.models import WorkerData
+    with SessionLocal() as db:
+        db.query(WorkerData).filter(WorkerData.email == "unified.worker@example.com").delete()
+        db.commit()
+
     payload = {
         "name": "Unified Worker",
         "phone": "9998880011",

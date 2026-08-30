@@ -11,16 +11,17 @@ from app.core.config import settings
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify plain password against hashed password."""
     try:
-        if not hashed_password:
+        if not hashed_password or not plain_password:
             return False
-        # If hashed with bcrypt
-        if hashed_password.startswith("$2b$") or hashed_password.startswith("$2a$"):
+        clean_hash = hashed_password.strip()
+        # If hashed with bcrypt ($2a$, $2b$, $2y$, $2x$)
+        if clean_hash.startswith(("$2b$", "$2a$", "$2y$", "$2x$", "$2")):
             return bcrypt.checkpw(
                 plain_password.encode("utf-8"),
-                hashed_password.encode("utf-8")
+                clean_hash.encode("utf-8")
             )
         # Fallback for plain text demo accounts if any
-        return plain_password == hashed_password
+        return plain_password == clean_hash
     except Exception:
         return False
 
