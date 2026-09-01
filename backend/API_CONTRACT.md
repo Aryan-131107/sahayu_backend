@@ -37,8 +37,29 @@
 - `GET /workers/{id}/reviews` | List worker reviews & avg rating | Resp: `{worker_id, average_rating, total_reviews, reviews: [...]}` | 200/404 | Auth: No
 - `GET /health` | System health check | Resp: `{status: "healthy", database: "connected", postgres_version}` | 200 | Auth: No
 
+## Demo Shramik / e-Shram Worker Verification
+- `POST /workers/verify` | Submit worker for demo Shramik verification | Body: `{[worker_id], shramik_id, [skill], [skill_certificate], [verification_type]}` | Resp: `{worker_id, name, shramik_id, verification_status: "PENDING", ...}` | 200/400/409 | Auth: Worker (optional if worker_id passed)
+- `GET /workers/{id}/verification` | Get worker verification status | Resp: `{worker_id, name, shramik_id, verification_status, verified_at, is_verified}` | 200/404 | Auth: No
+
+## Admin Dashboard (Role: Admin)
+- `GET /admin/stats` | Platform aggregates (workers, customers, bookings, payments, fees, earnings) | Resp: `{total_workers, verified_workers, pending_workers, total_bookings, completed_bookings, total_customer_payments, total_worker_earnings, total_platform_fees, total_revenue}` | 200/401/403 | Auth: Admin
+- `GET /admin/workers` | Filter & search workers | Query: `search, verification_status, is_active, skill_id, city` | Resp: `[{worker_id, name, phone, email, shramik_id, verification_status, is_active, skills, ...}]` | 200/401/403 | Auth: Admin
+- `PATCH /admin/workers/{id}/status` | Activate/deactivate worker | Body: `{is_active: bool}` | Resp: `{worker_id, is_active, ...}` | 200/401/403 | Auth: Admin
+- `GET /admin/verifications` | List pending worker verifications | Resp: `[{worker_id, name, shramik_id, verification_status: "PENDING", ...}]` | 200/401/403 | Auth: Admin
+- `GET /admin/workers/{id}/verification` | View worker verification details | Resp: `{worker_id, name, shramik_id, verification_status, ...}` | 200/401/403 | Auth: Admin
+- `PATCH /admin/workers/{id}/verify` | Approve and mark worker as VERIFIED | Resp: `{worker_id, verification_status: "VERIFIED", is_verified: true, verified_at, ...}` | 200/401/403 | Auth: Admin
+- `PATCH /admin/workers/{id}/reject` | Reject worker verification | Body: `{[rejection_reason]}` | Resp: `{worker_id, verification_status: "REJECTED", is_verified: false, ...}` | 200/401/403 | Auth: Admin
+- `GET /admin/bookings` | All bookings with transparent payment breakdown (Customer Payment = Platform Fee + Worker Earnings) | Query: `status_filter, payment_status, worker_id, customer_id` | Resp: `[{booking_id, customer, worker, service, amount, customer_paid_amount, platform_fee, worker_earnings, payment_breakdown: {...}}]` | 200/401/403 | Auth: Admin
+- `GET /admin/payments` | Dedicated payment transaction history | Resp: `[{booking_id, customer_name, worker_name, service_name, customer_paid_amount, platform_fee, worker_earnings, payment_status, payment_date}]` | 200/401/403 | Auth: Admin
+- `GET /admin/services` | Service catalog offerings | Resp: `[{service_id, service_name, base_price, is_active, skill, ...}]` | 200/401/403 | Auth: Admin
+- `POST /admin/services` | Create new service offering | Body: `{service_name, description, category, base_price, estimated_duration, skill_id}` | Resp: `{service_id, ...}` | 201/401/403 | Auth: Admin
+- `PATCH /admin/services/{id}` | Update service catalog offering | Body: `{[service_name], [description], [base_price], [is_active], [skill_id], ...}` | Resp: `{service_id, ...}` | 200/401/403 | Auth: Admin
+- `GET /admin/reviews` | List all platform reviews with customer & worker names | Resp: `[{review_id, booking_id, customer_name, worker_name, service_name, rating, review}]` | 200/401/403 | Auth: Admin
+
 ## Core User Flows
 1. **Customer Flow**:
    `POST /auth/register` (or `POST /auth/login`) -> `GET /services` -> `GET /workers/recommend?service_id=...` -> `POST /bookings` -> Track `GET /bookings/customer/me` -> `POST /reviews` after completion.
 2. **Worker Flow**:
-   `POST /auth/login` -> `GET /workers/me` -> `GET /bookings/worker/me` -> `PATCH /bookings/{id}/accept` -> `PATCH /bookings/{id}/start` -> `PATCH /bookings/{id}/complete`.
+   `POST /auth/login` -> `GET /workers/me` -> `POST /workers/verify` (submit Shramik ID) -> `GET /bookings/worker/me` -> `PATCH /bookings/{id}/accept` -> `PATCH /bookings/{id}/start` -> `PATCH /bookings/{id}/complete`.
+3. **Admin Flow**:
+   `POST /auth/login` (admin@example.com) -> `GET /admin/stats` -> `GET /admin/verifications` -> `PATCH /admin/workers/{id}/verify` -> `GET /admin/bookings` (monitor fee & earnings).

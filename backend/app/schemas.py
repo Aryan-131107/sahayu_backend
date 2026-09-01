@@ -125,6 +125,7 @@ class ServiceResponse(BaseModel):
     category: Optional[str] = None
     base_price: float
     estimated_duration: Optional[int] = 60
+    is_active: bool = True
     skill_id: int
     skill: Optional[SkillResponse] = None
 
@@ -201,8 +202,12 @@ class WorkerResponse(BaseModel):
     city: Optional[str] = None
     latitude: float
     longitude: float
-    is_verified: bool = True
-    verification_status: bool = True
+    is_verified: bool = False
+    verification_status: Optional[Any] = "PENDING"
+    verification_type: Optional[str] = "DEMO_SHRAMIK"
+    shramik_id: Optional[str] = None
+    skill_certificate: Optional[str] = None
+    verified_at: Optional[datetime] = None
     is_active: bool = True
     skills: Optional[List[WorkerSkillResponse]] = []
     average_rating: Optional[float] = None
@@ -356,3 +361,158 @@ class RecommendationResponse(BaseModel):
     service_name: Optional[str] = None
     total_found: int = 0
     recommendations: List[WorkerRecommendation]
+
+
+# ─────────────────────────────────────────────────────────
+# WORKER VERIFICATION SCHEMAS (Demo Shramik / e-Shram)
+# ─────────────────────────────────────────────────────────
+
+class WorkerVerificationSubmit(BaseModel):
+    worker_id: Optional[int] = Field(None, description="Worker ID to verify (required if not using worker Bearer token)")
+    shramik_id: str = Field(..., min_length=4, max_length=50, examples=["SHR-MP-2026-1001"])
+    skill: Optional[str] = Field(None, examples=["Electrician"])
+    skill_certificate: Optional[str] = Field(None, examples=["CERT-ITI-ELEC-2024"])
+    verification_type: Optional[str] = Field("DEMO_SHRAMIK", description="'DEMO_SHRAMIK', 'SKILL_CERTIFICATE', or 'BOTH'")
+
+
+class WorkerVerificationResponse(BaseModel):
+    worker_id: int
+    name: str
+    shramik_id: Optional[str] = None
+    skill_certificate: Optional[str] = None
+    verification_status: str = "PENDING"
+    verification_type: Optional[str] = "DEMO_SHRAMIK"
+    verified_at: Optional[datetime] = None
+    is_verified: bool = False
+    message: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WorkerVerificationAction(BaseModel):
+    rejection_reason: Optional[str] = Field(None, max_length=255, examples=["Invalid document format or mismatch."])
+
+
+class WorkerStatusUpdate(BaseModel):
+    is_active: bool = Field(..., description="Activate or deactivate worker")
+
+
+# ─────────────────────────────────────────────────────────
+# ADMIN DASHBOARD SCHEMAS
+# ─────────────────────────────────────────────────────────
+
+class AdminStatsResponse(BaseModel):
+    total_workers: int
+    verified_workers: int
+    pending_workers: int
+    pending_verifications: int
+    active_workers: int
+    total_customers: int
+    total_bookings: int
+    completed_bookings: int
+    total_customer_payments: float
+    total_worker_earnings: float
+    total_platform_fees: float
+    total_revenue: float
+
+
+class PaymentBreakdown(BaseModel):
+    customer_paid_amount: float
+    platform_fee: float
+    worker_earnings: float
+    platform_fee_percent: float = 10.0
+    payment_status: str
+
+
+class AdminPaymentItem(BaseModel):
+    booking_id: int
+    customer_id: int
+    customer_name: Optional[str] = None
+    worker_id: int
+    worker_name: Optional[str] = None
+    service_id: int
+    service_name: Optional[str] = None
+    customer_paid_amount: float
+    platform_fee: float
+    worker_earnings: float
+    payment_status: str
+    payment_date: Optional[datetime] = None
+
+
+class AdminWorkerItem(BaseModel):
+    worker_id: int
+    name: str
+    phone: str
+    email: str
+    experience_years: Optional[int] = 0
+    hourly_rate: Optional[float] = 250.00
+    address: Optional[str] = None
+    city: Optional[str] = None
+    latitude: float
+    longitude: float
+    is_verified: bool = False
+    verification_status: str = "PENDING"
+    verification_type: Optional[str] = "DEMO_SHRAMIK"
+    shramik_id: Optional[str] = None
+    skill_certificate: Optional[str] = None
+    verified_at: Optional[datetime] = None
+    is_active: bool = True
+    skills: List[WorkerSkillResponse] = []
+    average_rating: Optional[float] = None
+    total_reviews: int = 0
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminBookingItem(BaseModel):
+    booking_id: int
+    customer_id: int
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_email: Optional[str] = None
+    worker_id: int
+    worker_name: Optional[str] = None
+    worker_phone: Optional[str] = None
+    service_id: int
+    service_name: Optional[str] = None
+    category: Optional[str] = None
+    booking_date: Optional[date] = None
+    start_time: Optional[time] = None
+    address: Optional[str] = None
+    description: Optional[str] = None
+    amount: float
+    customer_paid_amount: float
+    platform_fee: float
+    worker_earnings: float
+    status: str
+    payment_status: str
+    created_at: Optional[datetime] = None
+    payment_breakdown: PaymentBreakdown
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ServiceUpdate(BaseModel):
+    service_name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    base_price: Optional[float] = Field(None, gt=0)
+    estimated_duration: Optional[int] = Field(None, gt=0)
+    is_active: Optional[bool] = None
+    skill_id: Optional[int] = None
+
+
+class AdminReviewItem(BaseModel):
+    review_id: int
+    booking_id: int
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    worker_id: Optional[int] = None
+    worker_name: Optional[str] = None
+    service_name: Optional[str] = None
+    rating: float
+    review: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)

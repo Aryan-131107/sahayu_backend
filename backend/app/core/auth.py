@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.core.security import decode_access_token
-from app.models import CustomerData, WorkerData
+from app.models import CustomerData, WorkerData, AdminUser
 
 # Token URL for swagger docs
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
@@ -19,7 +19,7 @@ http_bearer = HTTPBearer(auto_error=False)
 class AuthUser(BaseModel):
     id: int
     email: Optional[str] = None
-    role: str  # "customer" or "worker"
+    role: str  # "customer", "worker", or "admin"
     name: str
 
     model_config = {"from_attributes": True}
@@ -105,6 +105,19 @@ def get_current_user(
             role="worker",
             name=worker.name,
         )
+    elif role == "admin":
+        admin = db.get(AdminUser, user_id_int)
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Admin account no longer exists.",
+            )
+        return AuthUser(
+            id=admin.admin_id,
+            email=admin.email,
+            role="admin",
+            name=admin.name,
+        )
     else:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -141,5 +154,15 @@ def require_worker(current_user: AuthUser = Depends(get_current_user)) -> AuthUs
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access restricted to worker accounts only.",
+        )
+    return current_user
+
+
+def require_admin(current_user: AuthUser = Depends(get_current_user)) -> AuthUser:
+    """Enforce that the authenticated user is a platform administrator."""
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted to platform administrators only.",
         )
     return current_user

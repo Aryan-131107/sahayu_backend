@@ -10,6 +10,7 @@ from app.routers import (
     bookings,
     reviews,
     matching,
+    admin,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "bookings",
     "reviews",
     "matching",
+    "admin",
 ]

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import CustomerData, WorkerData, Skill, WorkerSkill
+from app.models import CustomerData, WorkerData, AdminUser, Skill, WorkerSkill
 from app.schemas import (
     RegisterRequest, CustomerRegister, WorkerRegister, LoginRequest, TokenResponse, UserProfile
 )
@@ -168,11 +168,25 @@ def register_worker(payload: WorkerRegister, db: Session = Depends(get_db)):
 @router.post(
     "/login",
     response_model=TokenResponse,
-    summary="User Login (Unified Customer & Worker Authentication)",
+    summary="User Login (Unified Customer, Worker & Admin Authentication)",
 )
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    """Authenticate customer or worker by email and password."""
+    """Authenticate customer, worker, or platform admin by email and password."""
     email_clean = payload.email.strip().lower()
+
+    if payload.role == "admin":
+        admin = db.query(AdminUser).filter(func.lower(AdminUser.email) == email_clean).first()
+        if admin and verify_password(payload.password, admin.password_hash):
+            token = create_access_token(data={"sub": str(admin.admin_id), "role": "admin", "email": admin.email})
+            return TokenResponse(
+                access_token=token,
+                user_type="admin",
+                user=UserProfile(
+                    id=admin.admin_id, name=admin.name, email=admin.email, phone="0000000000",
+                    role="admin", city="Jabalpur", address="Sahayu Admin Console"
+                )
+            )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin email or password.")
 
     if payload.role == "worker":
         worker = db.query(WorkerData).filter(func.lower(WorkerData.email) == email_clean).first()
@@ -202,7 +216,19 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid customer email or password.")
 
-    # Role unspecified — search customer first, then worker
+    # Role unspecified — search admin first, then customer, then worker
+    admin = db.query(AdminUser).filter(func.lower(AdminUser.email) == email_clean).first()
+    if admin and verify_password(payload.password, admin.password_hash):
+        token = create_access_token(data={"sub": str(admin.admin_id), "role": "admin", "email": admin.email})
+        return TokenResponse(
+            access_token=token,
+            user_type="admin",
+            user=UserProfile(
+                id=admin.admin_id, name=admin.name, email=admin.email, phone="0000000000",
+                role="admin", city="Jabalpur", address="Sahayu Admin Console"
+            )
+        )
+
     customer = db.query(CustomerData).filter(func.lower(CustomerData.email) == email_clean).first()
     if customer and verify_password(payload.password, customer.password_hash or ""):
         token = create_access_token(data={"sub": str(customer.customer_id), "role": "customer", "email": customer.email})
@@ -240,7 +266,15 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 )
 def get_me(current_user: AuthUser = Depends(get_current_user), db: Session = Depends(get_db)):
     """Return profile data of current JWT bearer."""
-    if current_user.role == "customer":
+    if current_user.role == "admin":
+        admin = db.get(AdminUser, current_user.id)
+        if not admin:
+            raise HTTPException(status_code=404, detail="Admin not found")
+        return UserProfile(
+            id=admin.admin_id, name=admin.name, email=admin.email, phone="0000000000",
+            role="admin", city="Jabalpur", address="Sahayu Admin Console"
+        )
+    elif current_user.role == "customer":
         cust = db.get(CustomerData, current_user.id)
         if not cust:
             raise HTTPException(status_code=404, detail="Customer not found")

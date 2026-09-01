@@ -22,6 +22,7 @@ from app.routers import (
     bookings,
     reviews,
     matching,
+    admin,
 )
 
 
@@ -79,6 +80,7 @@ api_router.include_router(availability.router)
 api_router.include_router(bookings.router)
 api_router.include_router(reviews.router)
 api_router.include_router(matching.router)
+api_router.include_router(admin.router)
 
 
 @api_router.get("/skills", response_model=List[SkillResponse], tags=["Skills"], summary="List all skills (/api/skills)")
@@ -110,6 +112,7 @@ app.include_router(bookings.router)
 app.include_router(reviews.router)
 app.include_router(availability.router)
 app.include_router(matching.router)
+app.include_router(admin.router)
 
 
 @app.get("/skills", response_model=List[SkillResponse], tags=["Skills"], summary="List all skills")

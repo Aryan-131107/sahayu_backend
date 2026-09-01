@@ -10,7 +10,8 @@ from app.database import get_db
 from app.models import WorkerData, Availability, WorkerSkill, Skill, RatingReview, Booking
 from app.schemas import (
     WorkerResponse, WorkerUpdate, WorkerSkillResponse, WorkerSkillAttach,
-    AvailabilityUpdate, AvailabilityResponse, RecommendationResponse
+    AvailabilityUpdate, AvailabilityResponse, RecommendationResponse,
+    WorkerVerificationSubmit, WorkerVerificationResponse
 )
 from app.services.matching import get_recommendations
 from app.core.auth import get_current_user, get_optional_current_user, require_worker, AuthUser
@@ -62,7 +63,11 @@ def _format_worker_response(worker: WorkerData, db: Session) -> WorkerResponse:
         latitude=float(worker.latitude) if worker.latitude is not None else 23.181500,
         longitude=float(worker.longitude) if worker.longitude is not None else 79.986400,
         is_verified=bool(worker.is_verified),
-        verification_status=bool(worker.is_verified),
+        verification_status=worker.verification_status or ("VERIFIED" if worker.is_verified else "PENDING"),
+        verification_type=worker.verification_type or "DEMO_SHRAMIK",
+        shramik_id=worker.shramik_id,
+        skill_certificate=worker.skill_certificate,
+        verified_at=worker.verified_at,
         is_active=bool(worker.is_active),
         skills=formatted_skills,
         average_rating=round(avg_rating, 2) if avg_rating is not None else None,
@@ -364,4 +369,119 @@ def update_availability(
         end_time=avail.end_time,
         is_available=avail.is_available,
         updated_at=avail.updated_at,
+    )
+
+
+# ─────────────────────────────────────────────────────────
+# DEMO SHRAMIK / e-SHRAM WORKER VERIFICATION ENDPOINTS
+# ─────────────────────────────────────────────────────────
+
+@router.post(
+    "/verify",
+    response_model=WorkerVerificationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Submit worker details for Demo Shramik / e-Shram verification",
+)
+def submit_worker_verification(
+    payload: WorkerVerificationSubmit,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Submit worker for Demo Shramik/e-Shram and skill certification verification.
+    Validates worker existence, checks duplicate Shramik IDs, and sets verification status to PENDING.
+    """
+    target_worker_id = payload.worker_id
+    if not target_worker_id:
+        if current_user and current_user.role == "worker":
+            target_worker_id = current_user.id
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="worker_id is required or user must be authenticated as a worker.",
+            )
+
+    if current_user and current_user.role == "worker" and current_user.id != target_worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot submit verification on behalf of another worker.",
+        )
+
+    worker = db.get(WorkerData, target_worker_id)
+    if not worker:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Worker {target_worker_id} not found.")
+
+    if worker.verification_status == "VERIFIED" and worker.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Worker is already verified.",
+        )
+
+    shramik_clean = payload.shramik_id.strip()
+
+    # Check for duplicate Shramik ID across other workers
+    duplicate = (
+        db.query(WorkerData)
+        .filter(
+            WorkerData.shramik_id == shramik_clean,
+            WorkerData.worker_id != target_worker_id,
+        )
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A worker with this Shramik / e-Shram ID already exists in the system.",
+        )
+
+    # Update worker verification fields
+    worker.shramik_id = shramik_clean
+    if payload.skill_certificate:
+        worker.skill_certificate = payload.skill_certificate.strip()
+    if payload.verification_type:
+        worker.verification_type = payload.verification_type
+    worker.verification_status = "PENDING"
+    worker.is_verified = False
+    worker.verified_at = None
+
+    db.commit()
+    db.refresh(worker)
+
+    return WorkerVerificationResponse(
+        worker_id=worker.worker_id,
+        name=worker.name,
+        shramik_id=worker.shramik_id,
+        skill_certificate=worker.skill_certificate,
+        verification_status=worker.verification_status,
+        verification_type=worker.verification_type,
+        verified_at=worker.verified_at,
+        is_verified=bool(worker.is_verified),
+        message="Verification request submitted successfully. Pending admin review.",
+    )
+
+
+@router.get(
+    "/{worker_id}/verification",
+    response_model=WorkerVerificationResponse,
+    summary="Get worker verification status",
+)
+def get_worker_verification_status(
+    worker_id: int,
+    db: Session = Depends(get_db),
+):
+    """Retrieve current verification status and details for a specific worker."""
+    worker = db.get(WorkerData, worker_id)
+    if not worker:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Worker {worker_id} not found.")
+
+    return WorkerVerificationResponse(
+        worker_id=worker.worker_id,
+        name=worker.name,
+        shramik_id=worker.shramik_id,
+        skill_certificate=worker.skill_certificate,
+        verification_status=worker.verification_status or ("VERIFIED" if worker.is_verified else "PENDING"),
+        verification_type=worker.verification_type or "DEMO_SHRAMIK",
+        verified_at=worker.verified_at,
+        is_verified=bool(worker.is_verified),
+        message=f"Current status: {worker.verification_status or 'PENDING'}",
     )

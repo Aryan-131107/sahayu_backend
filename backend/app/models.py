@@ -57,8 +57,15 @@ class WorkerData(Base):
     latitude: Mapped[float] = mapped_column(Numeric(9, 6), nullable=False, default=23.181500)
     longitude: Mapped[float] = mapped_column(Numeric(9, 6), nullable=False, default=79.986400)
     hourly_rate: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True, default=250.00)
-    is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)  # verification_status
+    is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Demo Shramik / e-Shram & Skill Verification Fields
+    shramik_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True, index=True)
+    skill_certificate: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    verification_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)  # PENDING, VERIFIED, REJECTED
+    verification_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="DEMO_SHRAMIK")  # DEMO_SHRAMIK, SKILL_CERTIFICATE, BOTH
+    verified_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, server_default=func.now())
 
     # Relationships
@@ -68,12 +75,23 @@ class WorkerData(Base):
     reviews: Mapped[List["RatingReview"]] = relationship("RatingReview", back_populates="worker")
 
     @property
-    def verification_status(self) -> bool:
-        return self.is_verified
-
-    @property
     def experience(self) -> int:
         return self.experience_years or 0
+
+
+class AdminUser(Base):
+    """
+    Table: admin_users
+    Stores platform administrator accounts and authorization roles.
+    """
+    __tablename__ = "admin_users"
+
+    admin_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str] = mapped_column(String(150), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(50), nullable=False, default="admin")
+    created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, server_default=func.now())
 
 
 class Skill(Base):
@@ -145,6 +163,7 @@ class Service(Base):
     category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, default="Household")
     base_price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=250.00)
     estimated_duration: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=60)  # minutes
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     skill_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("skills.skill_id", ondelete="RESTRICT"), nullable=False, index=True
     )
