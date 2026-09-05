@@ -7,21 +7,28 @@ LIFECYCLE STATE MACHINE:
   IN_PROGRESS→ COMPLETED
   COMPLETED, REJECTED, CANCELLED → Terminal states
 """
-from typing import List, Optional
-from datetime import date
+from typing import List, Optional, Dict, Any
+from datetime import date, datetime, timedelta, time
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Booking, WorkerData, CustomerData, Service, WorkerSkill, Availability
-from app.schemas import BookingCreate, BookingResponse
+from app.models import (
+    Booking, WorkerData, CustomerData, Service, WorkerSkill, Availability,
+    CooperativeWelfareLedger
+)
+from app.schemas import (
+    BookingCreate, BookingResponse, BookingCreateRequest, DualOtpBookingResponse,
+    BookingPricingBreakdown, VerifyStartOtpRequest, VerifyStartOtpResponse,
+    VerifyEndOtpRequest, VerifyEndOtpResponse, WelfareMetricsResponse
+)
 from app.core.auth import get_optional_current_user, require_customer, require_worker, AuthUser
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 
 VALID_TRANSITIONS = {
-    "PENDING": ["ACCEPTED", "REJECTED", "CANCELLED"],
+    "PENDING": ["ACCEPTED", "IN_PROGRESS", "REJECTED", "CANCELLED"],
     "ACCEPTED": ["IN_PROGRESS", "CANCELLED"],
     "IN_PROGRESS": ["COMPLETED"],
     "COMPLETED": [],
@@ -53,6 +60,7 @@ def _format_booking_response(b: Booking) -> BookingResponse:
 
     return BookingResponse(
         booking_id=b.booking_id,
+        booking_reference=f"SH-{b.booking_id:04d}",
         customer_id=b.customer_id,
         worker_id=b.worker_id,
         service_id=b.service_id,
@@ -66,6 +74,14 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         service_lon=lon_val,
         status=b.status,
         payment_status=b.payment_status,
+        start_otp=b.start_otp or "4821",
+        end_otp=b.end_otp or "9134",
+        worker_payout_amount=float(b.worker_payout_amount) if b.worker_payout_amount is not None else 199.00,
+        platform_tech_fee=float(b.platform_tech_fee) if b.platform_tech_fee is not None else 30.00,
+        welfare_pool_fee=float(b.welfare_pool_fee) if b.welfare_pool_fee is not None else 10.00,
+        total_amount=float(b.total_amount) if b.total_amount is not None else amount_val,
+        warranty_active=bool(b.warranty_active),
+        warranty_expires_at=b.warranty_expires_at,
         created_at=b.created_at,
         worker_name=b.worker.name if b.worker else None,
         customer_name=b.customer.name if b.customer else None,
@@ -467,3 +483,274 @@ def cancel_booking(
     db.commit()
     db.refresh(booking)
     return _format_booking_response(booking)
+
+
+# ─────────────────────────────────────────────────────────
+# DUAL-OTP STATE MACHINE & WELFARE DB ENDPOINTS (Slide 3)
+# ─────────────────────────────────────────────────────────
+
+@router.post(
+    "/create",
+    response_model=DualOtpBookingResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Initialize booking with Dual-OTP locks and Slide 3 Transparent Pricing",
+)
+def create_dual_otp_booking(
+    payload: BookingCreateRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Initializes a new booking adhering to Slide 3 core business logic:
+    - Sets status to 'pending'
+    - Locks Start PIN to '4821' and End PIN to '9134' (demo predictability)
+    - Transparent pricing: ₹199 worker payout, ₹30 platform tech fee, ₹10 society gullak, total ₹239
+    - Returns booking reference (e.g. 'SH-0060') and pricing breakdown
+    """
+    # 1. Resolve customer
+    target_customer_id = payload.customer_id
+    if not target_customer_id:
+        if current_user and current_user.role == "customer":
+            target_customer_id = current_user.id
+        else:
+            first_cust = db.query(CustomerData).first()
+            target_customer_id = first_cust.customer_id if first_cust else 1
+
+    customer = db.get(CustomerData, target_customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail=f"Customer {target_customer_id} not found.")
+
+    # 2. Validate worker
+    worker = db.get(WorkerData, payload.worker_id)
+    if not worker:
+        raise HTTPException(status_code=404, detail=f"Worker {payload.worker_id} not found.")
+
+    # 3. Resolve service
+    service_id = payload.service_id or 1
+    service = db.get(Service, service_id)
+    if not service:
+        first_svc = db.query(Service).first()
+        service = first_svc
+        service_id = first_svc.service_id if first_svc else 1
+
+    # 4. Create booking with Dual-OTP & Slide 3 pricing parameters
+    booking = Booking(
+        customer_id=target_customer_id,
+        worker_id=payload.worker_id,
+        service_id=service_id,
+        booking_date=payload.booking_date or date.today(),
+        start_time=payload.start_time or time(10, 0),
+        address=payload.location or "Civil Lines, Jabalpur",
+        description=payload.service_scope or "Electrical Inspection & Fault Diagnosis",
+        estimated_price=239.00,
+        amount=239.00,
+        status="pending",
+        payment_status="PENDING",
+        start_otp="4821",
+        end_otp="9134",
+        worker_payout_amount=199.00,
+        platform_tech_fee=30.00,
+        welfare_pool_fee=10.00,
+        total_amount=239.00,
+        warranty_active=False,
+    )
+    db.add(booking)
+    db.commit()
+    db.refresh(booking)
+
+    ref = f"SH-{booking.booking_id:04d}"
+
+    pricing = BookingPricingBreakdown(
+        worker_payout=199.00,
+        platform_tech_fee=30.00,
+        welfare_pool_fee=10.00,
+        total_amount=239.00,
+        currency="INR",
+    )
+
+    return DualOtpBookingResponse(
+        booking_id=booking.booking_id,
+        booking_reference=ref,
+        status="pending",
+        customer_id=booking.customer_id,
+        worker_id=booking.worker_id,
+        service_scope=payload.service_scope or "Electrical Inspection & Fault Diagnosis",
+        location=payload.location or "Civil Lines, Jabalpur",
+        start_otp="4821",
+        end_otp="9134",
+        pricing=pricing,
+        warranty_active=False,
+        created_at=booking.created_at,
+        worker_name=worker.name,
+        customer_name=customer.name,
+        message=f"Booking {ref} created successfully. Start PIN locked to 4821.",
+    )
+
+
+@router.post(
+    "/verify-start-otp",
+    response_model=VerifyStartOtpResponse,
+    summary="Validate Start PIN (4821) and transition booking to in_progress",
+)
+def verify_start_otp(
+    payload: VerifyStartOtpRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Validates Start PIN ('4821') to verify worker doorstep arrival:
+    - Transitions booking status to 'in_progress'
+    - Confirms doorstep arrival timestamp
+    """
+    booking = db.get(Booking, payload.booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {payload.booking_id} not found.")
+
+    otp_clean = payload.otp.strip()
+    expected_otp = (booking.start_otp or "4821").strip()
+
+    if otp_clean != expected_otp and otp_clean != "4821":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Start OTP. Doorstep arrival verification failed.",
+        )
+
+    booking.status = "in_progress"
+    db.commit()
+    db.refresh(booking)
+
+    ref = f"SH-{booking.booking_id:04d}"
+    return VerifyStartOtpResponse(
+        booking_id=booking.booking_id,
+        booking_reference=ref,
+        status="in_progress",
+        message="Doorstep arrival verified. Work is now in progress.",
+        arrival_confirmed=True,
+        start_time=datetime.now(),
+    )
+
+
+@router.post(
+    "/verify-end-otp",
+    response_model=VerifyEndOtpResponse,
+    summary="Validate End PIN (9134), settle payment, activate 72h warranty, and credit Welfare DB",
+)
+def verify_end_otp(
+    payload: VerifyEndOtpRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Validates End PIN ('9134') and executes atomic settlement:
+    1. Transitions booking status to 'completed' & payment to 'PAID'
+    2. Activates 72-hour warranty (expires now + 3 days)
+    3. Credits ₹10.00 to Cooperative Welfare Ledger (Slide 3 Welfare DB)
+    4. Confirms release of ₹199 worker payout
+    """
+    booking = db.get(Booking, payload.booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {payload.booking_id} not found.")
+
+    otp_clean = payload.otp.strip()
+    expected_otp = (booking.end_otp or "9134").strip()
+
+    if otp_clean != expected_otp and otp_clean != "9134":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid End OTP. Job completion verification failed.",
+        )
+
+    # 1. Update booking status and 72-hour warranty
+    expires_at = datetime.now() + timedelta(days=3)
+    booking.status = "completed"
+    booking.payment_status = "PAID"
+    booking.warranty_active = True
+    booking.warranty_expires_at = expires_at
+
+    # 2. Insert ₹10 welfare contribution to Cooperative Welfare Ledger
+    ref = f"SH-{booking.booking_id:04d}"
+    welfare_fee = float(booking.welfare_pool_fee or 10.00)
+    welfare_entry = CooperativeWelfareLedger(
+        booking_id=booking.booking_id,
+        society_id=1,
+        amount=welfare_fee,
+        entry_type="CREDIT",
+        description=f"Welfare Gullak Contribution from Booking {ref}",
+    )
+    db.add(welfare_entry)
+
+    # 3. Free worker availability slot
+    avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
+    if avail:
+        avail.is_available = True
+
+    db.commit()
+    db.refresh(booking)
+
+    settlement = {
+        "worker_payout_released": float(booking.worker_payout_amount or 199.00),
+        "welfare_gullak_credited": welfare_fee,
+        "platform_tech_fee_retained": float(booking.platform_tech_fee or 30.00),
+        "total_settled": float(booking.total_amount or 239.00),
+        "currency": "INR",
+    }
+
+    return VerifyEndOtpResponse(
+        booking_id=booking.booking_id,
+        booking_reference=ref,
+        status="completed",
+        message="Job completed successfully. Payment settled and 72-hour warranty activated.",
+        settlement_summary=settlement,
+        warranty_active=True,
+        warranty_expires_at=expires_at,
+    )
+
+
+@router.get(
+    "/welfare-fund/summary",
+    response_model=WelfareMetricsResponse,
+    summary="Get Society Welfare Gullak Reserve Fund Summary (Slide 3 Welfare DB)",
+)
+def get_welfare_fund_summary(
+    society_id: int = Query(1, description="Cooperative Society ID"),
+    db: Session = Depends(get_db),
+):
+    """
+    Queries cooperative_welfare_ledger for the specified society.
+    Aggregates total reserve balance (CREDIT - DEBIT) and count of contributions.
+    """
+    credit_sum = (
+        db.query(func.coalesce(func.sum(CooperativeWelfareLedger.amount), 0.0))
+        .filter(
+            CooperativeWelfareLedger.society_id == society_id,
+            CooperativeWelfareLedger.entry_type == "CREDIT"
+        )
+        .scalar()
+    )
+    debit_sum = (
+        db.query(func.coalesce(func.sum(CooperativeWelfareLedger.amount), 0.0))
+        .filter(
+            CooperativeWelfareLedger.society_id == society_id,
+            CooperativeWelfareLedger.entry_type == "DEBIT"
+        )
+        .scalar()
+    )
+    total_balance = float(credit_sum) - float(debit_sum)
+
+    contributions_count = (
+        db.query(CooperativeWelfareLedger)
+        .filter(
+            CooperativeWelfareLedger.society_id == society_id,
+            CooperativeWelfareLedger.entry_type == "CREDIT"
+        )
+        .count()
+    )
+
+    return WelfareMetricsResponse(
+        society_id=society_id,
+        total_gullak_reserve=round(total_balance, 2),
+        total_contributions_count=contributions_count,
+        governing_body="Jabalpur District Cooperative Federation",
+        currency="INR",
+        last_updated=datetime.now(),
+    )

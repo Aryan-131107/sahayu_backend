@@ -14,7 +14,8 @@ from datetime import date, timedelta, time
 from sqlalchemy import text, func
 from app.database import engine, SessionLocal, Base
 from app.models import (
-    CustomerData, WorkerData, AdminUser, Skill, WorkerSkill, Availability, Service, Booking, RatingReview
+    CustomerData, WorkerData, AdminUser, Skill, WorkerSkill, Availability, Service, Booking, RatingReview,
+    CooperativeWelfareLedger
 )
 from app.core.security import get_password_hash
 
@@ -380,8 +381,28 @@ def seed_database():
                     db.add(b)
                     bookings_added += 1
 
+        # ─────────────────────────────────────────────────────
+        # 6. SEED COOPERATIVE WELFARE LEDGER (Slide 3 Welfare DB)
+        # ─────────────────────────────────────────────────────
+        print("[*] Checking & Seeding Cooperative Welfare Ledger...")
+        completed_bookings = db.query(Booking).filter(Booking.status.in_(["COMPLETED", "completed"])).all()
+        welfare_added = 0
+        for b in completed_bookings:
+            w_exist = db.query(CooperativeWelfareLedger).filter(CooperativeWelfareLedger.booking_id == b.booking_id).first()
+            if not w_exist:
+                w_entry = CooperativeWelfareLedger(
+                    booking_id=b.booking_id,
+                    society_id=1,
+                    amount=float(b.welfare_pool_fee or 10.00),
+                    entry_type="CREDIT",
+                    description=f"Welfare Gullak Contribution from Booking SH-{b.booking_id:04d}",
+                )
+                db.add(w_entry)
+                welfare_added += 1
+
         db.commit()
-        print(f"[OK] Bookings and reviews ready ({bookings_added} newly created).")
+        welfare_count = db.query(CooperativeWelfareLedger).count()
+        print(f"[OK] Cooperative Welfare Ledger ready: {welfare_count} entries ({welfare_added} newly credited).")
 
         print("=" * 60)
         print("[SUCCESS] Database seeding completed successfully!")
@@ -389,6 +410,7 @@ def seed_database():
         print(f"  - Services: {len(service_map)}")
         print(f"  - Customers: {len(cust_objs)} (Demo: customer@example.com / Password123!)")
         print(f"  - Workers: {len(worker_objs)} (Demo: worker@example.com / Password123!)")
+        print(f"  - Welfare Ledger (Society 1 Gullak): {welfare_count} contributions")
         print("=" * 60)
 
     except Exception as e:

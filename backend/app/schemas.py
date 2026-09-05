@@ -262,8 +262,89 @@ class BookingCreate(BaseModel):
     amount: float = Field(..., gt=0, examples=[250.00])
 
 
+# ── Dual-OTP & Slide 3 Transparent Pricing Schemas ─────────────────────
+
+class BookingPricingBreakdown(BaseModel):
+    worker_payout: float = Field(199.00, description="Take-home wage directly released to worker")
+    platform_tech_fee: float = Field(30.00, description="Platform infrastructure and operational maintenance fee")
+    welfare_pool_fee: float = Field(10.00, description="Society Gullak welfare reserve fund contribution")
+    total_amount: float = Field(239.00, description="Total amount paid by customer")
+    currency: str = Field("INR", description="Currency identifier")
+
+
+class BookingCreateRequest(BaseModel):
+    customer_id: Optional[int] = Field(None, description="Customer ID (auto-resolved from JWT if omitted)", examples=[1])
+    worker_id: int = Field(..., description="Assigned gig worker ID", examples=[1])
+    service_id: Optional[int] = Field(1, description="Catalog service ID", examples=[1])
+    service_scope: str = Field("Electrical Inspection & Fault Diagnosis", examples=["Electrical Inspection & Fault Diagnosis"])
+    location: str = Field("Civil Lines, Jabalpur", examples=["Civil Lines, Jabalpur"])
+    booking_date: Optional[date] = Field(None, examples=["2026-09-05"])
+    start_time: Optional[time] = Field(None, examples=["10:00:00"])
+    description: Optional[str] = Field(None, examples=["Electrical fault check and diagnostics"])
+
+
+class DualOtpBookingResponse(BaseModel):
+    booking_id: int
+    booking_reference: str
+    status: str
+    customer_id: int
+    worker_id: int
+    service_scope: str
+    location: str
+    start_otp: str = "4821"
+    end_otp: str = "9134"
+    pricing: BookingPricingBreakdown
+    warranty_active: bool = False
+    warranty_expires_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    worker_name: Optional[str] = None
+    customer_name: Optional[str] = None
+    message: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VerifyStartOtpRequest(BaseModel):
+    booking_id: int = Field(..., examples=[1])
+    otp: str = Field(..., min_length=4, max_length=6, examples=["4821"])
+
+
+class VerifyStartOtpResponse(BaseModel):
+    booking_id: int
+    booking_reference: str
+    status: str = "in_progress"
+    message: str = "Doorstep arrival verified. Work is now in progress."
+    arrival_confirmed: bool = True
+    start_time: Optional[datetime] = None
+
+
+class VerifyEndOtpRequest(BaseModel):
+    booking_id: int = Field(..., examples=[1])
+    otp: str = Field(..., min_length=4, max_length=6, examples=["9134"])
+
+
+class VerifyEndOtpResponse(BaseModel):
+    booking_id: int
+    booking_reference: str
+    status: str = "completed"
+    message: str = "Job completed successfully. Payment settled and 72-hour warranty activated."
+    settlement_summary: Dict[str, Any]
+    warranty_active: bool = True
+    warranty_expires_at: Optional[datetime] = None
+
+
+class WelfareMetricsResponse(BaseModel):
+    society_id: int = 1
+    total_gullak_reserve: float = Field(..., description="Net total balance in society welfare reserve fund")
+    total_contributions_count: int = Field(..., description="Total count of welfare contributions recorded")
+    governing_body: str = Field("Jabalpur District Cooperative Federation", description="Supervising cooperative governance body")
+    currency: str = "INR"
+    last_updated: Optional[datetime] = None
+
+
 class BookingResponse(BaseModel):
     booking_id: int
+    booking_reference: Optional[str] = None
     customer_id: int
     worker_id: int
     service_id: int
@@ -277,6 +358,14 @@ class BookingResponse(BaseModel):
     service_lon: Optional[float] = None
     status: str
     payment_status: str
+    start_otp: Optional[str] = None
+    end_otp: Optional[str] = None
+    worker_payout_amount: Optional[float] = None
+    platform_tech_fee: Optional[float] = None
+    welfare_pool_fee: Optional[float] = None
+    total_amount: Optional[float] = None
+    warranty_active: Optional[bool] = False
+    warranty_expires_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     worker_name: Optional[str] = None
     customer_name: Optional[str] = None

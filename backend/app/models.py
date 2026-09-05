@@ -203,12 +203,44 @@ class Booking(Base):
     service_lon: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
     payment_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+
+    # Dual-OTP Verification & Transparent Settlement Breakdown (Slide 3 Business Logic)
+    start_otp: Mapped[str] = mapped_column(String(6), nullable=False, default="4821")
+    end_otp: Mapped[str] = mapped_column(String(6), nullable=False, default="9134")
+    worker_payout_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=199.00)
+    platform_tech_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=30.00)
+    welfare_pool_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=10.00)
+    total_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=239.00)
+    warranty_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    warranty_expires_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, server_default=func.now())
 
     customer: Mapped["CustomerData"] = relationship("CustomerData", back_populates="bookings")
     worker: Mapped["WorkerData"] = relationship("WorkerData", back_populates="bookings")
     service: Mapped["Service"] = relationship("Service", back_populates="bookings")
     review: Mapped[Optional["RatingReview"]] = relationship("RatingReview", back_populates="booking", uselist=False, cascade="all, delete-orphan")
+    welfare_entries: Mapped[List["CooperativeWelfareLedger"]] = relationship("CooperativeWelfareLedger", back_populates="booking")
+
+
+class CooperativeWelfareLedger(Base):
+    """
+    Table: cooperative_welfare_ledger
+    Cooperative Welfare Ledger / Society Gullak reserve fund (Slide 3 Welfare DB).
+    Tracks transparent ₹10 per booking contributions and community disbursements.
+    """
+    __tablename__ = "cooperative_welfare_ledger"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    booking_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("bookings.booking_id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    society_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=10.00)
+    entry_type: Mapped[str] = mapped_column(String(10), nullable=False, default="CREDIT")  # CREDIT, DEBIT
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, server_default=func.now())
+
+    booking: Mapped[Optional["Booking"]] = relationship("Booking", back_populates="welfare_entries")
 
 
 class RatingReview(Base):

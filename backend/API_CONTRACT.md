@@ -21,7 +21,11 @@
 - `PATCH /workers/{id}/availability` | Toggle availability | Body: `{is_available: bool}` | Resp: `{worker_id, is_available, ...}` | 200/403 | Auth: Worker (Self)
 
 ## Bookings & State Lifecycle
-- `POST /bookings` | Create booking | Body: `{[customer_id], worker_id, service_id, amount, [booking_date, start_time, address, description]}` | Resp: `{booking_id, status: "PENDING", ...}` | 201/400/409 | Auth: Customer (optional)
+- `POST /bookings` | Standard booking creation | Body: `{[customer_id], worker_id, service_id, amount, [booking_date, start_time, address, description]}` | Resp: `{booking_id, status: "PENDING", ...}` | 201/400/409 | Auth: Customer (optional)
+- `POST /bookings/create` | Dual-OTP Slide 3 Booking Initialization | Body: `{[customer_id], worker_id, [service_id], [service_scope], [location], [booking_date], [start_time]}` | Resp: `{booking_id, booking_reference: "SH-0060", start_otp: "4821", end_otp: "9134", pricing: {worker_payout: 199.00, platform_tech_fee: 30.00, welfare_pool_fee: 10.00, total_amount: 239.00}, status: "pending"}` | 201 | Auth: Customer (optional)
+- `POST /bookings/verify-start-otp` | Doorstep Arrival Verification (PIN 4821) | Body: `{booking_id, otp: "4821"}` | Resp: `{booking_id, booking_reference, status: "in_progress", arrival_confirmed: true}` | 200/400/404 | Auth: Optional
+- `POST /bookings/verify-end-otp` | Job Completion Settlement & 72h Warranty (PIN 9134) | Body: `{booking_id, otp: "9134"}` | Resp: `{booking_id, booking_reference, status: "completed", settlement_summary: {worker_payout_released: 199.00, welfare_gullak_credited: 10.00, platform_tech_fee_retained: 30.00, total_settled: 239.00}, warranty_active: true, warranty_expires_at}` | 200/400/404 | Auth: Optional
+- `GET /bookings/welfare-fund/summary` | Society Gullak Welfare Reserve Summary (Slide 3 Welfare DB) | Query: `society_id=1` | Resp: `{society_id: 1, total_gullak_reserve, total_contributions_count, governing_body: "Jabalpur District Cooperative Federation", currency: "INR"}` | 200 | Auth: No
 - `GET /bookings/customer/me` | Logged-in customer booking history | Query: `status_filter` | Resp: `[{booking_id, status, worker_name, amount, ...}]` | 200/401/403 | Auth: Customer
 - `GET /bookings/worker/me` | Logged-in worker incoming booking feed | Query: `status_filter` | Resp: `[{booking_id, status, customer_name, amount, ...}]` | 200/401/403 | Auth: Worker
 - `GET /bookings/{id}` | Get single booking details | Resp: `{booking_id, status, payment_status, ...}` | 200/404 | Auth: No
