@@ -76,11 +76,18 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         payment_status=b.payment_status,
         start_otp=b.start_otp or "4821",
         end_otp=b.end_otp or "9134",
+        start_otp_attempts=b.start_otp_attempts or 0,
+        end_otp_attempts=b.end_otp_attempts or 0,
+        is_start_otp_locked=bool(b.is_start_otp_locked),
+        is_end_otp_locked=bool(b.is_end_otp_locked),
+        start_otp_verified_at=b.start_otp_verified_at,
+        end_otp_verified_at=b.end_otp_verified_at,
         worker_payout_amount=float(b.worker_payout_amount) if b.worker_payout_amount is not None else 199.00,
         platform_tech_fee=float(b.platform_tech_fee) if b.platform_tech_fee is not None else 30.00,
         welfare_pool_fee=float(b.welfare_pool_fee) if b.welfare_pool_fee is not None else 10.00,
         total_amount=float(b.total_amount) if b.total_amount is not None else amount_val,
         warranty_active=bool(b.warranty_active),
+        warranty_started_at=b.warranty_started_at,
         warranty_expires_at=b.warranty_expires_at,
         created_at=b.created_at,
         worker_name=b.worker.name if b.worker else None,
@@ -599,34 +606,84 @@ def verify_start_otp(
 ):
     """
     Validates Start PIN ('4821') to verify worker doorstep arrival:
-    - Transitions booking status to 'in_progress'
-    - Confirms doorstep arrival timestamp
+    - Verifies booking exists and user authorization
+    - Validates booking state is in PENDING/BOOKED/ACCEPTED/ARRIVED
+    - Rejects if Start OTP already verified (Reuse Protection)
+    - Enforces max 3 attempts limit and server-side lock
+    - On success: transitions booking to 'in_progress', records verification timestamp
     """
     booking = db.get(Booking, payload.booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail=f"Booking {payload.booking_id} not found.")
 
-    otp_clean = payload.otp.strip()
-    expected_otp = (booking.start_otp or "4821").strip()
+    # Authorization check
+    if current_user:
+        if current_user.role == "customer" and current_user.id != booking.customer_id:
+            raise HTTPException(status_code=403, detail="Cannot verify Start OTP for another customer's booking.")
+        if current_user.role == "worker" and current_user.id != booking.worker_id:
+            raise HTTPException(status_code=403, detail="Cannot verify Start OTP for a booking assigned to another worker.")
 
-    if otp_clean != expected_otp and otp_clean != "4821":
+    # State validation & Reuse protection
+    status_upper = (booking.status or "").upper()
+    if status_upper in ["IN_PROGRESS", "WORK_COMPLETED", "COMPLETED"] or booking.start_otp_verified_at is not None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Start OTP. Doorstep arrival verification failed.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot verify Start OTP. Booking is already '{booking.status}' (Start OTP cannot be reused).",
+        )
+    if status_upper in ["CANCELLED", "REJECTED"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot verify Start OTP on a '{booking.status}' booking.",
         )
 
+    # Attempt limit & Lock check
+    if booking.is_start_otp_locked or (booking.start_otp_attempts or 0) >= 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum verification attempts reached (3/3). Start PIN verification is locked.",
+        )
+
+    otp_clean = payload.otp.strip()
+    expected_otp = (booking.start_otp or "4821").strip()
+    now = datetime.now()
+
+    # Validate PIN
+    if otp_clean != expected_otp and otp_clean != "4821":
+        booking.start_otp_attempts = (booking.start_otp_attempts or 0) + 1
+        booking.last_otp_attempt_at = now
+        if booking.start_otp_attempts >= 3:
+            booking.is_start_otp_locked = True
+        db.commit()
+
+        attempts_remaining = max(0, 3 - booking.start_otp_attempts)
+        if booking.start_otp_attempts >= 3:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum verification attempts reached (3/3). Start PIN verification is locked.",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid Handshake PIN. Attempt {booking.start_otp_attempts} of 3 recorded. {attempts_remaining} attempts remaining.",
+            )
+
+    # Success Flow
+    booking.start_otp_verified_at = now
     booking.status = "in_progress"
     db.commit()
     db.refresh(booking)
 
     ref = f"SH-{booking.booking_id:04d}"
     return VerifyStartOtpResponse(
+        success=True,
         booking_id=booking.booking_id,
         booking_reference=ref,
         status="in_progress",
         message="Doorstep arrival verified. Work is now in progress.",
         arrival_confirmed=True,
-        start_time=datetime.now(),
+        verification_timestamp=now,
+        start_time=now,
+        transaction_id=f"TXN-START-{booking.booking_id:06d}",
     )
 
 
@@ -642,44 +699,103 @@ def verify_end_otp(
 ):
     """
     Validates End PIN ('9134') and executes atomic settlement:
-    1. Transitions booking status to 'completed' & payment to 'PAID'
-    2. Activates 72-hour warranty (expires now + 3 days)
-    3. Credits ₹10.00 to Cooperative Welfare Ledger (Slide 3 Welfare DB)
-    4. Confirms release of ₹199 worker payout
+    - Verifies booking exists and user authorization
+    - Validates booking is in IN_PROGRESS state
+    - Rejects duplicate settlement if booking is already COMPLETED (Reuse Protection)
+    - Enforces max 3 attempts limit and server-side lock
+    - On success:
+        1. Transitions booking status to 'completed' & payment to 'PAID'
+        2. Activates 72-hour warranty (expires exactly now + 72 hours)
+        3. Creates +₹10.00 CREDIT in cooperative_welfare_ledger (idempotent, no duplicates)
+        4. Releases worker payout ₹199.00 and retains tech fee ₹30.00
     """
     booking = db.get(Booking, payload.booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail=f"Booking {payload.booking_id} not found.")
 
-    otp_clean = payload.otp.strip()
-    expected_otp = (booking.end_otp or "9134").strip()
+    # Authorization check
+    if current_user:
+        if current_user.role == "customer" and current_user.id != booking.customer_id:
+            raise HTTPException(status_code=403, detail="Cannot verify End OTP for another customer's booking.")
+        if current_user.role == "worker" and current_user.id != booking.worker_id:
+            raise HTTPException(status_code=403, detail="Cannot verify End OTP for a booking assigned to another worker.")
 
-    if otp_clean != expected_otp and otp_clean != "9134":
+    # State validation & Reuse protection
+    status_upper = (booking.status or "").upper()
+    if status_upper in ["COMPLETED"] or booking.end_otp_verified_at is not None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid End OTP. Job completion verification failed.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Booking is already completed. End OTP cannot be reused and duplicate settlement is prevented.",
+        )
+    if status_upper not in ["IN_PROGRESS", "WORK_COMPLETED"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot verify End OTP on booking in '{booking.status}' state. Start OTP must be verified first.",
         )
 
-    # 1. Update booking status and 72-hour warranty
-    expires_at = datetime.now() + timedelta(days=3)
+    # Attempt limit & Lock check
+    if booking.is_end_otp_locked or (booking.end_otp_attempts or 0) >= 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum verification attempts reached (3/3). End PIN verification is locked.",
+        )
+
+    otp_clean = payload.otp.strip()
+    expected_otp = (booking.end_otp or "9134").strip()
+    now = datetime.now()
+
+    # Validate PIN
+    if otp_clean != expected_otp and otp_clean != "9134":
+        booking.end_otp_attempts = (booking.end_otp_attempts or 0) + 1
+        booking.last_otp_attempt_at = now
+        if booking.end_otp_attempts >= 3:
+            booking.is_end_otp_locked = True
+        db.commit()
+
+        attempts_remaining = max(0, 3 - booking.end_otp_attempts)
+        if booking.end_otp_attempts >= 3:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum verification attempts reached (3/3). End PIN verification is locked.",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid Completion PIN. Attempt {booking.end_otp_attempts} of 3 recorded. {attempts_remaining} attempts remaining.",
+            )
+
+    # Atomic Settlement & Database Transaction
+    expires_at = now + timedelta(days=3)  # Exactly 72 hours
+    booking.end_otp_verified_at = now
     booking.status = "completed"
     booking.payment_status = "PAID"
     booking.warranty_active = True
+    booking.warranty_started_at = now
     booking.warranty_expires_at = expires_at
 
-    # 2. Insert ₹10 welfare contribution to Cooperative Welfare Ledger
     ref = f"SH-{booking.booking_id:04d}"
-    welfare_fee = float(booking.welfare_pool_fee or 10.00)
-    welfare_entry = CooperativeWelfareLedger(
-        booking_id=booking.booking_id,
-        society_id=1,
-        amount=welfare_fee,
-        entry_type="CREDIT",
-        description=f"Welfare Gullak Contribution from Booking {ref}",
-    )
-    db.add(welfare_entry)
+    welfare_fee = round(float(booking.welfare_pool_fee or 10.00), 2)
 
-    # 3. Free worker availability slot
+    # Idempotent Gullak credit
+    existing_welfare = (
+        db.query(CooperativeWelfareLedger)
+        .filter(
+            CooperativeWelfareLedger.booking_id == booking.booking_id,
+            CooperativeWelfareLedger.entry_type == "CREDIT"
+        )
+        .first()
+    )
+    if not existing_welfare:
+        welfare_entry = CooperativeWelfareLedger(
+            booking_id=booking.booking_id,
+            society_id=1,
+            amount=welfare_fee,
+            entry_type="CREDIT",
+            description=f"Welfare Gullak Contribution from Booking {ref}",
+        )
+        db.add(welfare_entry)
+
+    # Free worker availability slot
     avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
     if avail:
         avail.is_available = True
@@ -688,20 +804,28 @@ def verify_end_otp(
     db.refresh(booking)
 
     settlement = {
+        "worker_payout_amount": float(booking.worker_payout_amount or 199.00),
         "worker_payout_released": float(booking.worker_payout_amount or 199.00),
+        "welfare_pool_fee": welfare_fee,
         "welfare_gullak_credited": welfare_fee,
+        "platform_tech_fee": float(booking.platform_tech_fee or 30.00),
         "platform_tech_fee_retained": float(booking.platform_tech_fee or 30.00),
         "total_settled": float(booking.total_amount or 239.00),
         "currency": "INR",
     }
 
     return VerifyEndOtpResponse(
+        success=True,
         booking_id=booking.booking_id,
         booking_reference=ref,
         status="completed",
-        message="Job completed successfully. Payment settled and 72-hour warranty activated.",
+        message="Job completed successfully. Payment settled, Gullak credited, and 72-hour warranty activated.",
+        completion_timestamp=now,
+        transaction_id=f"TXN-SAHAYU-{booking.booking_id:06d}",
         settlement_summary=settlement,
+        settlement_information=settlement,
         warranty_active=True,
+        warranty_started_at=now,
         warranty_expires_at=expires_at,
     )
 

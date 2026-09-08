@@ -310,12 +310,15 @@ class VerifyStartOtpRequest(BaseModel):
 
 
 class VerifyStartOtpResponse(BaseModel):
+    success: bool = True
     booking_id: int
     booking_reference: str
     status: str = "in_progress"
     message: str = "Doorstep arrival verified. Work is now in progress."
     arrival_confirmed: bool = True
+    verification_timestamp: Optional[datetime] = None
     start_time: Optional[datetime] = None
+    transaction_id: Optional[str] = None
 
 
 class VerifyEndOtpRequest(BaseModel):
@@ -324,13 +327,27 @@ class VerifyEndOtpRequest(BaseModel):
 
 
 class VerifyEndOtpResponse(BaseModel):
+    success: bool = True
     booking_id: int
     booking_reference: str
     status: str = "completed"
-    message: str = "Job completed successfully. Payment settled and 72-hour warranty activated."
+    message: str = "Job completed successfully. Payment settled, Gullak credited, and 72-hour warranty activated."
+    completion_timestamp: Optional[datetime] = None
+    transaction_id: Optional[str] = None
     settlement_summary: Dict[str, Any]
+    settlement_information: Optional[Dict[str, Any]] = None
     warranty_active: bool = True
+    warranty_started_at: Optional[datetime] = None
     warranty_expires_at: Optional[datetime] = None
+
+
+class OtpErrorDetail(BaseModel):
+    success: bool = False
+    error: str
+    message: str
+    attempts_count: int
+    attempts_remaining: int
+    is_locked: bool
 
 
 class WelfareMetricsResponse(BaseModel):
@@ -360,11 +377,18 @@ class BookingResponse(BaseModel):
     payment_status: str
     start_otp: Optional[str] = None
     end_otp: Optional[str] = None
+    start_otp_attempts: Optional[int] = 0
+    end_otp_attempts: Optional[int] = 0
+    is_start_otp_locked: Optional[bool] = False
+    is_end_otp_locked: Optional[bool] = False
+    start_otp_verified_at: Optional[datetime] = None
+    end_otp_verified_at: Optional[datetime] = None
     worker_payout_amount: Optional[float] = None
     platform_tech_fee: Optional[float] = None
     welfare_pool_fee: Optional[float] = None
     total_amount: Optional[float] = None
     warranty_active: Optional[bool] = False
+    warranty_started_at: Optional[datetime] = None
     warranty_expires_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     worker_name: Optional[str] = None
