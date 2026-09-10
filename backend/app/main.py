@@ -35,6 +35,12 @@ async def lifespan(app: FastAPI):
     try:
         pg_version = verify_connection()
         print(f"[OK] Database connected: {str(pg_version)[:60]}...")
+        try:
+            from seed import seed_database
+            seed_database()
+            print("[OK] Database tables, columns, and rate card items verified.")
+        except Exception as seed_err:
+            print(f"[WARNING] Database seed/migration notice on startup: {seed_err}")
     except Exception as e:
         print(f"[WARNING] Database connection on startup: {e}")
     yield
