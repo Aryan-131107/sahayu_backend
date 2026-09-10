@@ -262,13 +262,39 @@ def test_booking_state_transitions():
 
 def test_cannot_accept_completed_booking():
     """Cannot re-accept a completed booking."""
-    resp = client.patch("/bookings/1/accept")
+    create_resp = client.post("/bookings", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_id": 1,
+        "booking_date": (date.today() + timedelta(days=90)).isoformat(),
+        "start_time": "16:00:00",
+        "amount": 250.00,
+    })
+    b_id = create_resp.json()["booking_id"]
+    client.patch(f"/bookings/{b_id}/accept")
+    client.patch(f"/bookings/{b_id}/start")
+    client.patch(f"/bookings/{b_id}/complete")
+
+    resp = client.patch(f"/bookings/{b_id}/accept")
     assert resp.status_code == 409
 
 
 def test_cannot_cancel_completed_booking():
     """Cannot cancel a completed booking."""
-    resp = client.patch("/bookings/1/cancel")
+    create_resp = client.post("/bookings", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_id": 1,
+        "booking_date": (date.today() + timedelta(days=91)).isoformat(),
+        "start_time": "16:00:00",
+        "amount": 250.00,
+    })
+    b_id = create_resp.json()["booking_id"]
+    client.patch(f"/bookings/{b_id}/accept")
+    client.patch(f"/bookings/{b_id}/start")
+    client.patch(f"/bookings/{b_id}/complete")
+
+    resp = client.patch(f"/bookings/{b_id}/cancel")
     assert resp.status_code == 409
 
 

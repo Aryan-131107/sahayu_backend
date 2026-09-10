@@ -15,7 +15,7 @@ from sqlalchemy import text, func
 from app.database import engine, SessionLocal, Base
 from app.models import (
     CustomerData, WorkerData, AdminUser, Skill, WorkerSkill, Availability, Service, Booking, RatingReview,
-    CooperativeWelfareLedger
+    CooperativeWelfareLedger, RateCardItem
 )
 from app.core.security import get_password_hash
 
@@ -135,6 +135,77 @@ def seed_database():
 
         db.commit()
         print(f"[OK] Services ready: {len(service_map)} total ({services_added} newly added).")
+
+        # ─────────────────────────────────────────────────────
+        # 2b. SEED TRADE-SPECIFIC RATE CARDS (Linked to Skill)
+        # ─────────────────────────────────────────────────────
+        print("[*] Checking & Seeding Trade-Specific Rate Card Items...")
+        rate_cards_data = [
+            # Electrician
+            ("Electrician", "Ceiling Fan Capacitor Replacement", "MATERIAL", 80.00, "piece", "High-durability 2.5uF/3.15uF motor run capacitor"),
+            ("Electrician", "MCB Replacement 16A/32A", "MATERIAL", 150.00, "piece", "ISI marked single pole C-curve MCB switch"),
+            ("Electrician", "Additional Point Internal Wiring (per 5m)", "LABOR", 120.00, "point", "Concealed or casing-capping wiring extension per 5 meters"),
+            ("Electrician", "Modular Switch/Socket Replacement", "LABOR", 60.00, "piece", "Disassembly and installation of modular switch or 3-pin socket"),
+            ("Electrician", "LED Tube/Bulb Holder Installation", "LABOR", 50.00, "unit", "Fixture assembly and bracket wall drilling"),
+
+            # Painter
+            ("Painter", "Wall Putty Patch & Crack Filling (per wall)", "LABOR", 150.00, "wall", "Scraping, acrylic wall putty application and smooth sanding"),
+            ("Painter", "Premium Emulsion Paint (1 Litre)", "MATERIAL", 280.00, "litre", "Interior anti-fungal washable acrylic emulsion paint"),
+            ("Painter", "Primer Coat Application (per room)", "LABOR", 250.00, "room", "Water-based wall interior primer sealer coat"),
+            ("Painter", "Waterproofing Wall Sealant (per 10 sq.ft)", "MATERIAL", 320.00, "sq.ft", "Damp-proof elastomeric polymer coating"),
+            ("Painter", "Door & Window Enamel Gloss Painting", "LABOR", 200.00, "unit", "Sanding, rust cleaning and double-coat synthetic enamel"),
+
+            # Plumber
+            ("Plumber", "Angle Valve / Bib Cock Replacement", "LABOR", 100.00, "piece", "Removal of jammed valve and brass/chrome tap fitting"),
+            ("Plumber", "CPVC Pipe Joint & Leak Seal (per joint)", "LABOR", 120.00, "joint", "Pipe cutting, solvent cement weld, and pressure testing"),
+            ("Plumber", "Flush Cistern Internal Mechanism Kit", "MATERIAL", 250.00, "kit", "Complete siphon, ball valve and dual flush valve kit"),
+            ("Plumber", "Teflon Tape & Sealant Pack", "MATERIAL", 40.00, "pack", "High-density thread seal tape and gasket compound"),
+
+            # Carpenter
+            ("Carpenter", "Hydraulic Hinge Replacement (Pair)", "MATERIAL", 180.00, "pair", "Soft-close hydraulic cabinet hinge with screws"),
+            ("Carpenter", "Door Handle & Lock Cylinder Fitting", "LABOR", 150.00, "lock", "Chiseling, mortise lock installation and key alignment"),
+            ("Carpenter", "Drawer Channel Slide Replacement", "LABOR", 130.00, "drawer", "Telescopic ball bearing drawer runner fitting"),
+
+            # Appliance Repair
+            ("Appliance Repair", "Washing Machine Inlet Valve", "MATERIAL", 350.00, "piece", "Solenoid water inlet valve assembly"),
+            ("Appliance Repair", "Drain Pump Replacement", "LABOR", 250.00, "unit", "Motor unmounting and drainage impeller replacement"),
+            ("Appliance Repair", "Capacitor / Motor Relay", "MATERIAL", 180.00, "piece", "Appliance motor starting capacitor"),
+
+            # AC Technician
+            ("AC Technician", "AC Gas Top-Up (R32 / R410A)", "MATERIAL", 850.00, "unit", "High pressure refrigerant gas charge & leak test"),
+            ("AC Technician", "Capacitor 45uF/50uF Replacement", "MATERIAL", 350.00, "piece", "Compressor heavy duty run capacitor"),
+            ("AC Technician", "Outdoor Unit Foam Jet Deep Wash", "LABOR", 300.00, "unit", "High pressure coil chemical foam cleaning"),
+
+            # House Cleaning
+            ("House Cleaning", "Balcony Deep Pressure Wash", "LABOR", 200.00, "balcony", "Floor descaling, railing wipe and grime removal"),
+            ("House Cleaning", "Kitchen Chimney Degreasing & Filter Wash", "LABOR", 350.00, "unit", "Baffle filter caustic wash and rotor cleaning"),
+            ("House Cleaning", "Eco-Friendly Disinfectant Pack", "MATERIAL", 120.00, "pack", "Surface disinfectant and microfiber cleaning pads"),
+        ]
+
+        rate_cards_added = 0
+        for skill_name, item_name, cat, rate, unit, desc in rate_cards_data:
+            if skill_name in skill_objs:
+                sk_id = skill_objs[skill_name].skill_id
+                existing = db.query(RateCardItem).filter(
+                    RateCardItem.skill_id == sk_id,
+                    func.lower(RateCardItem.item_name) == item_name.lower(),
+                ).first()
+                if not existing:
+                    rc_item = RateCardItem(
+                        skill_id=sk_id,
+                        item_name=item_name,
+                        category=cat,
+                        unit_rate=rate,
+                        unit=unit,
+                        description=desc,
+                        is_active=True,
+                    )
+                    db.add(rc_item)
+                    rate_cards_added += 1
+
+        db.commit()
+        total_rate_cards = db.query(RateCardItem).count()
+        print(f"[OK] Rate Card Items ready: {total_rate_cards} total ({rate_cards_added} newly added).")
 
         # ─────────────────────────────────────────────────────
         # 3. SEED CUSTOMERS (10 Accounts)

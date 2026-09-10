@@ -67,15 +67,35 @@ def test_review_rejected_for_non_completed_booking():
 
 def test_review_duplicate_rejected():
     """1-to-1 Constraint: Prohibit duplicate reviews for the same booking."""
-    # Booking 1 is already reviewed in seed data
-    rev_resp = client.post("/api/reviews", json={
-        "booking_id": 1,
+    b_resp = client.post("/api/bookings", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_id": 1,
+        "booking_date": (date.today() + timedelta(days=99)).isoformat(),
+        "start_time": "14:00:00",
+        "amount": 250.00,
+    })
+    b_id = b_resp.json()["booking_id"]
+    client.patch(f"/api/bookings/{b_id}/accept")
+    client.patch(f"/api/bookings/{b_id}/start")
+    client.patch(f"/api/bookings/{b_id}/complete")
+
+    rev1 = client.post("/api/reviews", json={
+        "booking_id": b_id,
+        "customer_id": 1,
+        "rating": 4.5,
+        "review": "First review",
+    })
+    assert rev1.status_code == 201
+
+    rev2 = client.post("/api/reviews", json={
+        "booking_id": b_id,
         "customer_id": 1,
         "rating": 4.0,
         "review": "Duplicate review attempt",
     })
-    assert rev_resp.status_code == 409
-    assert "already" in rev_resp.json()["detail"].lower()
+    assert rev2.status_code == 409
+    assert "already" in rev2.json()["detail"].lower()
 
 
 def test_review_wrong_customer_rejected():

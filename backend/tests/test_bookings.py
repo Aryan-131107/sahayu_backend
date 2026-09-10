@@ -206,6 +206,19 @@ def test_booking_cancellation_flow():
 
 def test_invalid_state_transition_from_completed():
     """Cannot accept or cancel a COMPLETED booking."""
-    resp = client.patch("/api/bookings/1/accept")
+    create_resp = client.post("/api/bookings", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_id": 1,
+        "booking_date": (date.today() + timedelta(days=95)).isoformat(),
+        "start_time": "17:00:00",
+        "amount": 250.00,
+    })
+    b_id = create_resp.json()["booking_id"]
+    client.patch(f"/api/bookings/{b_id}/accept")
+    client.patch(f"/api/bookings/{b_id}/start")
+    client.patch(f"/api/bookings/{b_id}/complete")
+
+    resp = client.patch(f"/api/bookings/{b_id}/accept")
     assert resp.status_code == 409
     assert "Cannot transition" in resp.json()["detail"]

@@ -9,6 +9,7 @@ LIFECYCLE STATE MACHINE:
 """
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime, timedelta, time
+from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
@@ -16,12 +17,15 @@ from sqlalchemy import func
 from app.database import get_db
 from app.models import (
     Booking, WorkerData, CustomerData, Service, WorkerSkill, Availability,
-    CooperativeWelfareLedger
+    CooperativeWelfareLedger, Skill, RateCardItem, Quotation, QuotationItem
 )
 from app.schemas import (
     BookingCreate, BookingResponse, BookingCreateRequest, DualOtpBookingResponse,
     BookingPricingBreakdown, VerifyStartOtpRequest, VerifyStartOtpResponse,
-    VerifyEndOtpRequest, VerifyEndOtpResponse, WelfareMetricsResponse
+    VerifyEndOtpRequest, VerifyEndOtpResponse, WelfareMetricsResponse,
+    RateCardItemResponse, RateCardListResponse, QuotationCreateRequest,
+    QuotationResponse, QuotationItemResponse, QuotationApprovalRequest,
+    QuotationRejectionRequest
 )
 from app.core.auth import get_optional_current_user, require_customer, require_worker, AuthUser
 
@@ -30,7 +34,9 @@ router = APIRouter(prefix="/bookings", tags=["Bookings"])
 VALID_TRANSITIONS = {
     "PENDING": ["ACCEPTED", "IN_PROGRESS", "REJECTED", "CANCELLED"],
     "ACCEPTED": ["IN_PROGRESS", "CANCELLED"],
-    "IN_PROGRESS": ["COMPLETED"],
+    "IN_PROGRESS": ["WORK_COMPLETED", "PAYMENT_PENDING", "COMPLETED", "CANCELLED"],
+    "WORK_COMPLETED": ["PAYMENT_PENDING", "COMPLETED", "CANCELLED"],
+    "PAYMENT_PENDING": ["COMPLETED", "CANCELLED"],
     "COMPLETED": [],
     "REJECTED": [],
     "CANCELLED": [],
@@ -52,11 +58,49 @@ def _validate_booking_transition(current: str, target: str) -> None:
         )
 
 
+def _format_quotation_response(q: Quotation) -> QuotationResponse:
+    items_resp = [
+        QuotationItemResponse(
+            item_id=item.item_id,
+            quotation_id=item.quotation_id,
+            rate_card_item_id=item.rate_card_item_id,
+            item_name=item.item_name,
+            category=item.category,
+            unit_rate=float(item.unit_rate),
+            quantity=item.quantity,
+            total_amount=float(item.total_amount),
+            created_at=item.created_at,
+        )
+        for item in (q.items or [])
+    ]
+    return QuotationResponse(
+        quotation_id=q.quotation_id,
+        booking_id=q.booking_id,
+        worker_id=q.worker_id,
+        status=q.status,
+        additional_labor_charge=float(q.additional_labor_charge or 0.00),
+        additional_material_charge=float(q.additional_material_charge or 0.00),
+        total_additional_amount=float(q.total_additional_amount or 0.00),
+        worker_notes=q.worker_notes,
+        customer_notes=q.customer_notes,
+        submitted_at=q.submitted_at,
+        approved_at=q.approved_at,
+        rejected_at=q.rejected_at,
+        created_at=q.created_at,
+        items=items_resp,
+    )
+
+
 def _format_booking_response(b: Booking) -> BookingResponse:
     amount_val = float(b.amount) if b.amount is not None else 0.0
     est_price_val = float(b.estimated_price) if b.estimated_price is not None else amount_val
     lat_val = float(b.service_lat) if b.service_lat is not None else None
     lon_val = float(b.service_lon) if b.service_lon is not None else None
+    final_amt = float(b.final_amount) if b.final_amount is not None else float(b.total_amount or amount_val)
+
+    latest_q = None
+    if b.quotations:
+        latest_q = _format_quotation_response(b.quotations[-1])
 
     return BookingResponse(
         booking_id=b.booking_id,
@@ -86,6 +130,15 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         platform_tech_fee=float(b.platform_tech_fee) if b.platform_tech_fee is not None else 30.00,
         welfare_pool_fee=float(b.welfare_pool_fee) if b.welfare_pool_fee is not None else 10.00,
         total_amount=float(b.total_amount) if b.total_amount is not None else amount_val,
+        additional_service_charge=float(b.additional_service_charge or 0.00),
+        material_charge=float(b.material_charge or 0.00),
+        final_amount=final_amt,
+        quotation_status=b.quotation_status or "NONE",
+        customer_approved_at=b.customer_approved_at,
+        work_completed_at=b.work_completed_at,
+        payment_reference=b.payment_reference,
+        payment_completed_at=b.payment_completed_at,
+        settled_at=b.settled_at,
         warranty_active=bool(b.warranty_active),
         warranty_started_at=b.warranty_started_at,
         warranty_expires_at=b.warranty_expires_at,
@@ -93,6 +146,7 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         worker_name=b.worker.name if b.worker else None,
         customer_name=b.customer.name if b.customer else None,
         service_name=b.service.service_name if b.service else None,
+        latest_quotation=latest_q,
     )
 
 
@@ -493,6 +547,368 @@ def cancel_booking(
 
 
 # ─────────────────────────────────────────────────────────
+# RATE CARD & ON-SITE QUOTATION ENDPOINTS
+# ─────────────────────────────────────────────────────────
+
+@router.get(
+    "/rate-card",
+    response_model=RateCardListResponse,
+    summary="Get rate card items by skill ID",
+)
+def get_rate_card_by_skill(
+    skill_id: int = Query(..., description="Skill ID to fetch rate card for"),
+    db: Session = Depends(get_db),
+):
+    skill = db.get(Skill, skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill {skill_id} not found.")
+
+    items = (
+        db.query(RateCardItem)
+        .filter(RateCardItem.skill_id == skill_id, RateCardItem.is_active == True)
+        .order_by(RateCardItem.category, RateCardItem.item_name)
+        .all()
+    )
+
+    return RateCardListResponse(
+        skill_id=skill_id,
+        skill_name=skill.skill_name,
+        items=[
+            RateCardItemResponse(
+                item_id=it.item_id,
+                skill_id=it.skill_id,
+                service_id=it.service_id,
+                item_name=it.item_name,
+                category=it.category,
+                unit_rate=float(it.unit_rate),
+                unit=it.unit,
+                description=it.description,
+                is_active=it.is_active,
+            )
+            for it in items
+        ],
+    )
+
+
+@router.get(
+    "/{booking_id}/rate-card",
+    response_model=RateCardListResponse,
+    summary="Get trade-specific rate card items for a booking",
+)
+def get_booking_rate_card(
+    booking_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Fetches strictly the trade-specific rate card items belonging to the booking's skill.
+    Prevents skill-card mismatch (e.g. Painting job never sees MCB/Capacitor).
+    """
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    service = booking.service or db.get(Service, booking.service_id)
+    skill_id = service.skill_id if service else 1
+    skill = db.get(Skill, skill_id)
+
+    items = (
+        db.query(RateCardItem)
+        .filter(RateCardItem.skill_id == skill_id, RateCardItem.is_active == True)
+        .order_by(RateCardItem.category, RateCardItem.item_name)
+        .all()
+    )
+
+    return RateCardListResponse(
+        skill_id=skill_id,
+        skill_name=skill.skill_name if skill else None,
+        service_id=service.service_id if service else None,
+        service_name=service.service_name if service else None,
+        items=[
+            RateCardItemResponse(
+                item_id=it.item_id,
+                skill_id=it.skill_id,
+                service_id=it.service_id,
+                item_name=it.item_name,
+                category=it.category,
+                unit_rate=float(it.unit_rate),
+                unit=it.unit,
+                description=it.description,
+                is_active=it.is_active,
+            )
+            for it in items
+        ],
+    )
+
+
+@router.post(
+    "/{booking_id}/quotation",
+    response_model=QuotationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Worker submits on-site quotation for additional labor and parts",
+)
+def create_quotation(
+    booking_id: int,
+    payload: QuotationCreateRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Worker submits on-site quotation:
+    - Validates items belong to booking's skill category (rejects cross-trade items)
+    - Authoritative database pricing (rejects arbitrary frontend prices)
+    - Sets quotation to QUOTE_PENDING
+    """
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
+        raise HTTPException(status_code=403, detail="Cannot submit quotation for a booking assigned to another worker.")
+
+    service = booking.service or db.get(Service, booking.service_id)
+    skill_id = service.skill_id if service else 1
+
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Quotation must contain at least one item.")
+
+    labor_total = Decimal("0.00")
+    material_total = Decimal("0.00")
+    validated_items = []
+
+    for item_req in payload.items:
+        rc_item = db.get(RateCardItem, item_req.rate_card_item_id)
+        if not rc_item or not rc_item.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Rate card item {item_req.rate_card_item_id} not found or inactive.",
+            )
+        if rc_item.skill_id != skill_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Rate card item '{rc_item.item_name}' belongs to skill ID {rc_item.skill_id}, "
+                    f"which does not match booking trade skill ID {skill_id}."
+                ),
+            )
+        qty = max(1, item_req.quantity)
+        amt = Decimal(str(rc_item.unit_rate)) * qty
+        if rc_item.category.upper() == "LABOR":
+            labor_total += amt
+        else:
+            material_total += amt
+        validated_items.append((rc_item, qty, float(amt)))
+
+    total_add = labor_total + material_total
+    now = datetime.now()
+
+    quote = Quotation(
+        booking_id=booking_id,
+        worker_id=booking.worker_id,
+        status="QUOTE_PENDING",
+        additional_labor_charge=float(labor_total),
+        additional_material_charge=float(material_total),
+        total_additional_amount=float(total_add),
+        worker_notes=payload.worker_notes,
+        submitted_at=now,
+    )
+    db.add(quote)
+    db.flush()
+
+    for rc_item, qty, amt in validated_items:
+        qi = QuotationItem(
+            quotation_id=quote.quotation_id,
+            rate_card_item_id=rc_item.item_id,
+            item_name=rc_item.item_name,
+            category=rc_item.category,
+            unit_rate=float(rc_item.unit_rate),
+            quantity=qty,
+            total_amount=amt,
+        )
+        db.add(qi)
+
+    booking.quotation_status = "QUOTE_PENDING"
+    db.commit()
+    db.refresh(quote)
+    return _format_quotation_response(quote)
+
+
+@router.get(
+    "/{booking_id}/quotation",
+    response_model=Optional[QuotationResponse],
+    summary="Get latest quotation for a booking",
+)
+def get_booking_quotation(
+    booking_id: int,
+    db: Session = Depends(get_db),
+):
+    quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking_id)
+        .order_by(Quotation.quotation_id.desc())
+        .first()
+    )
+    if not quote:
+        return None
+    return _format_quotation_response(quote)
+
+
+@router.post(
+    "/{booking_id}/quotation/approve",
+    response_model=BookingResponse,
+    summary="Customer approves quotation",
+)
+def approve_quotation(
+    booking_id: int,
+    payload: Optional[QuotationApprovalRequest] = None,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
+        raise HTTPException(status_code=403, detail="Cannot approve quotation for another customer's booking.")
+
+    quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_PENDING")
+        .order_by(Quotation.quotation_id.desc())
+        .first()
+    )
+    if not quote:
+        raise HTTPException(status_code=404, detail="No pending quotation found for this booking.")
+
+    now = datetime.now()
+    quote.status = "QUOTE_APPROVED"
+    quote.approved_at = now
+    if payload and payload.customer_notes:
+        quote.customer_notes = payload.customer_notes
+
+    # Update booking with approved quotation amounts
+    base_charge = 239.00
+    total_additional = float(quote.total_additional_amount)
+    final_total = round(base_charge + total_additional, 2)
+
+    booking.quotation_status = "QUOTE_APPROVED"
+    booking.customer_approved_at = now
+    booking.additional_service_charge = float(quote.additional_labor_charge)
+    booking.material_charge = float(quote.additional_material_charge)
+    booking.final_amount = final_total
+    booking.total_amount = final_total
+    booking.worker_payout_amount = round(199.00 + float(quote.additional_labor_charge) + float(quote.additional_material_charge), 2)
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/quotation/reject",
+    response_model=BookingResponse,
+    summary="Customer rejects quotation",
+)
+def reject_quotation(
+    booking_id: int,
+    payload: Optional[QuotationRejectionRequest] = None,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
+        raise HTTPException(status_code=403, detail="Cannot reject quotation for another customer's booking.")
+
+    quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_PENDING")
+        .order_by(Quotation.quotation_id.desc())
+        .first()
+    )
+    if not quote:
+        raise HTTPException(status_code=404, detail="No pending quotation found for this booking.")
+
+    now = datetime.now()
+    quote.status = "QUOTE_REJECTED"
+    quote.rejected_at = now
+    if payload and payload.customer_notes:
+        quote.customer_notes = payload.customer_notes
+
+    booking.quotation_status = "QUOTE_REJECTED"
+    booking.additional_service_charge = 0.00
+    booking.material_charge = 0.00
+    booking.final_amount = 239.00
+    booking.total_amount = 239.00
+    booking.worker_payout_amount = 199.00
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/work-completed",
+    response_model=BookingResponse,
+    summary="Worker marks work complete before Completion OTP",
+)
+@router.patch(
+    "/{booking_id}/work-completed",
+    response_model=BookingResponse,
+    summary="Worker marks work complete before Completion OTP",
+)
+def mark_work_completed(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
+        raise HTTPException(status_code=403, detail="Cannot mark work complete for a booking assigned to another worker.")
+
+    now = datetime.now()
+    booking.work_completed_at = now
+    booking.status = "WORK_COMPLETED"
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/verify-start",
+    response_model=VerifyStartOtpResponse,
+    summary="Validate Start PIN (4821) by booking ID URL param",
+)
+def verify_start_by_id(
+    booking_id: int,
+    payload: VerifyStartOtpRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    payload.booking_id = booking_id
+    return verify_start_otp(payload, current_user, db)
+
+
+@router.post(
+    "/{booking_id}/verify-end",
+    response_model=VerifyEndOtpResponse,
+    summary="Validate End PIN (9134) by booking ID URL param",
+)
+def verify_end_by_id(
+    booking_id: int,
+    payload: VerifyEndOtpRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    payload.booking_id = booking_id
+    return verify_end_otp(payload, current_user, db)
+
+
+# ─────────────────────────────────────────────────────────
 # DUAL-OTP STATE MACHINE & WELFARE DB ENDPOINTS (Slide 3)
 # ─────────────────────────────────────────────────────────
 
@@ -559,6 +975,8 @@ def create_dual_otp_booking(
         platform_tech_fee=30.00,
         welfare_pool_fee=10.00,
         total_amount=239.00,
+        final_amount=239.00,
+        quotation_status="NONE",
         warranty_active=False,
     )
     db.add(booking)
@@ -604,14 +1022,6 @@ def verify_start_otp(
     current_user: Optional[AuthUser] = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Validates Start PIN ('4821') to verify worker doorstep arrival:
-    - Verifies booking exists and user authorization
-    - Validates booking state is in PENDING/BOOKED/ACCEPTED/ARRIVED
-    - Rejects if Start OTP already verified (Reuse Protection)
-    - Enforces max 3 attempts limit and server-side lock
-    - On success: transitions booking to 'in_progress', records verification timestamp
-    """
     booking = db.get(Booking, payload.booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail=f"Booking {payload.booking_id} not found.")
@@ -625,7 +1035,7 @@ def verify_start_otp(
 
     # State validation & Reuse protection
     status_upper = (booking.status or "").upper()
-    if status_upper in ["IN_PROGRESS", "WORK_COMPLETED", "COMPLETED"] or booking.start_otp_verified_at is not None:
+    if status_upper in ["IN_PROGRESS", "WORK_COMPLETED", "PAYMENT_PENDING", "COMPLETED"] or booking.start_otp_verified_at is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot verify Start OTP. Booking is already '{booking.status}' (Start OTP cannot be reused).",
@@ -690,7 +1100,7 @@ def verify_start_otp(
 @router.post(
     "/verify-end-otp",
     response_model=VerifyEndOtpResponse,
-    summary="Validate End PIN (9134), settle payment, activate 72h warranty, and credit Welfare DB",
+    summary="Validate End PIN (9134) and transition to PAYMENT_PENDING",
 )
 def verify_end_otp(
     payload: VerifyEndOtpRequest,
@@ -698,16 +1108,12 @@ def verify_end_otp(
     db: Session = Depends(get_db),
 ):
     """
-    Validates End PIN ('9134') and executes atomic settlement:
+    Validates End PIN ('9134') and transitions booking to PAYMENT_PENDING:
     - Verifies booking exists and user authorization
-    - Validates booking is in IN_PROGRESS state
-    - Rejects duplicate settlement if booking is already COMPLETED (Reuse Protection)
+    - Validates booking is in IN_PROGRESS or WORK_COMPLETED state
+    - Rejects duplicate verification if booking is already COMPLETED / PAID
     - Enforces max 3 attempts limit and server-side lock
-    - On success:
-        1. Transitions booking status to 'completed' & payment to 'PAID'
-        2. Activates 72-hour warranty (expires exactly now + 72 hours)
-        3. Creates +₹10.00 CREDIT in cooperative_welfare_ledger (idempotent, no duplicates)
-        4. Releases worker payout ₹199.00 and retains tech fee ₹30.00
+    - On success: transitions to 'payment_pending' awaiting customer payment to settle and activate warranty
     """
     booking = db.get(Booking, payload.booking_id)
     if not booking:
@@ -725,9 +1131,9 @@ def verify_end_otp(
     if status_upper in ["COMPLETED"] or booking.end_otp_verified_at is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Booking is already completed. End OTP cannot be reused and duplicate settlement is prevented.",
+            detail="Booking is already completed. End OTP cannot be reused.",
         )
-    if status_upper not in ["IN_PROGRESS", "WORK_COMPLETED"]:
+    if status_upper not in ["IN_PROGRESS", "WORK_COMPLETED", "ACCEPTED"]:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot verify End OTP on booking in '{booking.status}' state. Start OTP must be verified first.",
@@ -764,53 +1170,22 @@ def verify_end_otp(
                 detail=f"Invalid Completion PIN. Attempt {booking.end_otp_attempts} of 3 recorded. {attempts_remaining} attempts remaining.",
             )
 
-    # Atomic Settlement & Database Transaction
-    expires_at = now + timedelta(days=3)  # Exactly 72 hours
+    # Transition to PAYMENT_PENDING (Payment collected after completion)
     booking.end_otp_verified_at = now
-    booking.status = "completed"
-    booking.payment_status = "PAID"
-    booking.warranty_active = True
-    booking.warranty_started_at = now
-    booking.warranty_expires_at = expires_at
-
-    ref = f"SH-{booking.booking_id:04d}"
-    welfare_fee = round(float(booking.welfare_pool_fee or 10.00), 2)
-
-    # Idempotent Gullak credit
-    existing_welfare = (
-        db.query(CooperativeWelfareLedger)
-        .filter(
-            CooperativeWelfareLedger.booking_id == booking.booking_id,
-            CooperativeWelfareLedger.entry_type == "CREDIT"
-        )
-        .first()
-    )
-    if not existing_welfare:
-        welfare_entry = CooperativeWelfareLedger(
-            booking_id=booking.booking_id,
-            society_id=1,
-            amount=welfare_fee,
-            entry_type="CREDIT",
-            description=f"Welfare Gullak Contribution from Booking {ref}",
-        )
-        db.add(welfare_entry)
-
-    # Free worker availability slot
-    avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
-    if avail:
-        avail.is_available = True
-
+    booking.status = "payment_pending"
     db.commit()
     db.refresh(booking)
 
+    ref = f"SH-{booking.booking_id:04d}"
+    total_amt = float(booking.final_amount or booking.total_amount or 239.00)
+    welfare_fee = round(float(booking.welfare_pool_fee or 10.00), 2)
+    worker_payout = float(booking.worker_payout_amount or (total_amt - 30.00 - welfare_fee))
+
     settlement = {
-        "worker_payout_amount": float(booking.worker_payout_amount or 199.00),
-        "worker_payout_released": float(booking.worker_payout_amount or 199.00),
+        "worker_payout_amount": worker_payout,
         "welfare_pool_fee": welfare_fee,
-        "welfare_gullak_credited": welfare_fee,
         "platform_tech_fee": float(booking.platform_tech_fee or 30.00),
-        "platform_tech_fee_retained": float(booking.platform_tech_fee or 30.00),
-        "total_settled": float(booking.total_amount or 239.00),
+        "total_settled": total_amt,
         "currency": "INR",
     }
 
@@ -818,15 +1193,13 @@ def verify_end_otp(
         success=True,
         booking_id=booking.booking_id,
         booking_reference=ref,
-        status="completed",
-        message="Job completed successfully. Payment settled, Gullak credited, and 72-hour warranty activated.",
+        status="payment_pending",
+        message="Completion OTP verified. Payment is now pending to finalize settlement and activate 72h warranty.",
         completion_timestamp=now,
         transaction_id=f"TXN-SAHAYU-{booking.booking_id:06d}",
         settlement_summary=settlement,
         settlement_information=settlement,
-        warranty_active=True,
-        warranty_started_at=now,
-        warranty_expires_at=expires_at,
+        warranty_active=False,
     )
 
 

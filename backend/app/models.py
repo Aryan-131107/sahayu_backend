@@ -108,6 +108,7 @@ class Skill(Base):
     # Relationships
     services: Mapped[List["Service"]] = relationship("Service", back_populates="skill")
     worker_skills: Mapped[List["WorkerSkill"]] = relationship("WorkerSkill", back_populates="skill", cascade="all, delete-orphan")
+    rate_card_items: Mapped[List["RateCardItem"]] = relationship("RateCardItem", back_populates="skill", cascade="all, delete-orphan")
 
 
 class WorkerSkill(Base):
@@ -170,16 +171,49 @@ class Service(Base):
 
     skill: Mapped["Skill"] = relationship("Skill", back_populates="services")
     bookings: Mapped[List["Booking"]] = relationship("Booking", back_populates="service")
+    rate_card_items: Mapped[List["RateCardItem"]] = relationship("RateCardItem", back_populates="service")
 
     @property
     def service(self) -> str:
         return self.service_name
 
 
+class RateCardItem(Base):
+    """
+    Table: rate_card_items
+    Cooperative-approved rate card for additional labor, replacement parts, and materials.
+    Mapped directly to vocational Skill / Service category to prevent skill-card mismatch.
+    """
+    __tablename__ = "rate_card_items"
+
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    skill_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("skills.skill_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    service_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("services.service_id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    item_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(String(50), nullable=False, default="LABOR")  # LABOR, MATERIAL, SERVICE
+    unit: Mapped[str] = mapped_column(String(50), nullable=False, default="unit")  # per unit, per point, per sq ft, fixed
+    unit_rate: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    @property
+    def rate(self) -> float:
+        return float(self.unit_rate)
+
+    skill: Mapped["Skill"] = relationship("Skill", back_populates="rate_card_items")
+    service: Mapped[Optional["Service"]] = relationship("Service", back_populates="rate_card_items")
+    quotation_items: Mapped[List["QuotationItem"]] = relationship("QuotationItem", back_populates="rate_card_item")
+
+
 class Booking(Base):
     """
     Table: bookings
-    Core gig transaction tracking lifecycle, double-booking guard, and payment status.
+    Core gig transaction tracking lifecycle, inspection-first state machine, double-booking guard, and payment status.
     """
     __tablename__ = "bookings"
 
@@ -198,13 +232,13 @@ class Booking(Base):
     address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     estimated_price: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
-    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=250.00)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=239.00)
     service_lat: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
     service_lon: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
-    payment_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="CONFIRMED", index=True)
+    payment_status: Mapped[str] = mapped_column(String(30), nullable=False, default="PENDING")
 
-    # Dual-OTP Verification & Transparent Settlement Breakdown (Slide 3 Business Logic)
+    # Dual-OTP Verification & Attempt Tracking
     start_otp: Mapped[str] = mapped_column(String(6), nullable=False, default="4821")
     end_otp: Mapped[str] = mapped_column(String(6), nullable=False, default="9134")
     start_otp_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -215,12 +249,24 @@ class Booking(Base):
     end_otp_verified_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     last_otp_attempt_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
+    # Base Inspection Breakdown (₹239 = ₹199 Worker + ₹30 Tech/Ops + ₹10 Gullak)
     worker_payout_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=199.00)
     platform_tech_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=30.00)
     welfare_pool_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=10.00)
     total_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=239.00)
 
-    # 72-Hour Cooperative Warranty (Slide 3)
+    # Additional Work Quotation & Final Amount
+    additional_service_charge: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.00)
+    material_charge: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.00)
+    final_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=239.00)
+    quotation_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, default="NONE")  # NONE, QUOTE_PENDING, QUOTE_APPROVED, QUOTE_REJECTED
+    customer_approved_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    work_completed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    payment_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    payment_completed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    settled_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    # 72-Hour Cooperative Workmanship Protection
     warranty_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     warranty_started_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     warranty_expires_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
@@ -231,6 +277,87 @@ class Booking(Base):
     service: Mapped["Service"] = relationship("Service", back_populates="bookings")
     review: Mapped[Optional["RatingReview"]] = relationship("RatingReview", back_populates="booking", uselist=False, cascade="all, delete-orphan")
     welfare_entries: Mapped[List["CooperativeWelfareLedger"]] = relationship("CooperativeWelfareLedger", back_populates="booking")
+    quotations: Mapped[List["Quotation"]] = relationship("Quotation", back_populates="booking", cascade="all, delete-orphan")
+    payment_records: Mapped[List["PaymentRecord"]] = relationship("PaymentRecord", back_populates="booking", cascade="all, delete-orphan")
+
+
+class Quotation(Base):
+    """
+    Table: quotations
+    On-site additional work quotation created by worker and approved/rejected by customer.
+    """
+    __tablename__ = "quotations"
+
+    quotation_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    booking_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("bookings.booking_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    worker_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("worker_data.worker_id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="DRAFT", index=True)  # DRAFT, QUOTE_PENDING, QUOTE_APPROVED, QUOTE_REJECTED
+    additional_labor_charge: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.00)
+    additional_material_charge: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.00)
+    total_additional_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.00)
+    worker_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    customer_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    rejected_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    booking: Mapped["Booking"] = relationship("Booking", back_populates="quotations")
+    worker: Mapped["WorkerData"] = relationship("WorkerData")
+    items: Mapped[List["QuotationItem"]] = relationship("QuotationItem", back_populates="quotation", cascade="all, delete-orphan")
+
+
+class QuotationItem(Base):
+    """
+    Table: quotation_items
+    Line items on a quotation backed strictly by approved database RateCardItem.
+    """
+    __tablename__ = "quotation_items"
+
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    quotation_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("quotations.quotation_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rate_card_item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("rate_card_items.item_id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    item_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    category: Mapped[str] = mapped_column(String(50), nullable=False, default="LABOR")
+    unit_rate: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    total_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    quotation: Mapped["Quotation"] = relationship("Quotation", back_populates="items")
+    rate_card_item: Mapped["RateCardItem"] = relationship("RateCardItem", back_populates="quotation_items")
+
+
+class PaymentRecord(Base):
+    """
+    Table: payment_records
+    Payment transaction audit log supporting Razorpay and isolated Demo Pay mode.
+    """
+    __tablename__ = "payment_records"
+
+    payment_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    booking_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("bookings.booking_id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    order_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    payment_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="INR")
+    payment_method: Mapped[str] = mapped_column(String(50), nullable=False, default="DEMO_PAY")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="SUCCESS", index=True)
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    booking: Mapped["Booking"] = relationship("Booking", back_populates="payment_records")
 
 
 class CooperativeWelfareLedger(Base):

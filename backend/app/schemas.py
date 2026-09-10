@@ -359,6 +359,129 @@ class WelfareMetricsResponse(BaseModel):
     last_updated: Optional[datetime] = None
 
 
+class RateCardItemResponse(BaseModel):
+    item_id: int
+    skill_id: int
+    service_id: Optional[int] = None
+    item_name: str
+    category: str
+    unit_rate: float
+    unit: str
+    description: Optional[str] = None
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RateCardListResponse(BaseModel):
+    skill_id: int
+    skill_name: Optional[str] = None
+    service_id: Optional[int] = None
+    service_name: Optional[str] = None
+    items: List[RateCardItemResponse]
+
+
+class QuotationItemCreate(BaseModel):
+    rate_card_item_id: int
+    quantity: int = Field(1, ge=1)
+
+
+class QuotationCreateRequest(BaseModel):
+    items: List[QuotationItemCreate]
+    worker_notes: Optional[str] = None
+
+
+class QuotationItemResponse(BaseModel):
+    item_id: int
+    quotation_id: int
+    rate_card_item_id: int
+    item_name: str
+    category: str
+    unit_rate: float
+    quantity: int
+    total_amount: float
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuotationResponse(BaseModel):
+    quotation_id: int
+    booking_id: int
+    worker_id: int
+    status: str
+    additional_labor_charge: float
+    additional_material_charge: float
+    total_additional_amount: float
+    worker_notes: Optional[str] = None
+    customer_notes: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    approved_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    items: List[QuotationItemResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuotationApprovalRequest(BaseModel):
+    customer_notes: Optional[str] = None
+
+
+class QuotationRejectionRequest(BaseModel):
+    customer_notes: Optional[str] = None
+
+
+class PaymentOrderCreate(BaseModel):
+    booking_id: int
+    amount: Optional[float] = None
+
+
+class PaymentOrderResponse(BaseModel):
+    order_id: str
+    booking_id: int
+    amount: float
+    currency: str = "INR"
+    key_id: Optional[str] = None
+    is_demo: bool = True
+
+
+class PaymentVerifyRequest(BaseModel):
+    booking_id: int
+    razorpay_order_id: Optional[str] = None
+    razorpay_payment_id: Optional[str] = None
+    razorpay_signature: Optional[str] = None
+    is_demo: bool = False
+
+
+class PaymentVerifyResponse(BaseModel):
+    success: bool = True
+    booking_id: int
+    status: str = "completed"
+    payment_status: str = "paid"
+    payment_reference: str
+    amount_paid: float
+    settlement_summary: Dict[str, Any]
+    warranty_active: bool = True
+    warranty_started_at: Optional[datetime] = None
+    warranty_expires_at: Optional[datetime] = None
+    message: str = "Payment successful and settled. Warranty activated."
+
+
+class DemoPaymentRequest(BaseModel):
+    booking_id: int
+    payment_method: str = "DEMO_UPI"
+
+
+class DemoResetResponse(BaseModel):
+    success: bool = True
+    message: str
+    booking_id: int
+    status: str
+    start_otp: str
+    end_otp: str
+
+
 class BookingResponse(BaseModel):
     booking_id: int
     booking_reference: Optional[str] = None
@@ -387,6 +510,15 @@ class BookingResponse(BaseModel):
     platform_tech_fee: Optional[float] = None
     welfare_pool_fee: Optional[float] = None
     total_amount: Optional[float] = None
+    additional_service_charge: Optional[float] = 0.00
+    material_charge: Optional[float] = 0.00
+    final_amount: Optional[float] = None
+    quotation_status: Optional[str] = "NONE"
+    customer_approved_at: Optional[datetime] = None
+    work_completed_at: Optional[datetime] = None
+    payment_reference: Optional[str] = None
+    payment_completed_at: Optional[datetime] = None
+    settled_at: Optional[datetime] = None
     warranty_active: Optional[bool] = False
     warranty_started_at: Optional[datetime] = None
     warranty_expires_at: Optional[datetime] = None
@@ -394,6 +526,7 @@ class BookingResponse(BaseModel):
     worker_name: Optional[str] = None
     customer_name: Optional[str] = None
     service_name: Optional[str] = None
+    latest_quotation: Optional[QuotationResponse] = None
 
     model_config = ConfigDict(from_attributes=True)
 

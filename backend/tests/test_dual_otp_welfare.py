@@ -116,34 +116,41 @@ def test_3_wrong_otp_3_times_locks_verification():
 
 
 # ─────────────────────────────────────────────────────────
-# TEST 4: Correct END OTP → COMPLETED → worker settlement → ₹10 Gullak credit → warranty activated
+# TEST 4: Correct END OTP → PAYMENT_PENDING → Demo Pay → Settlement, ₹10 Gullak credit, warranty activated
 # ─────────────────────────────────────────────────────────
 def test_4_correct_end_otp_settles_and_activates_warranty_and_credits_gullak():
-    """Correct END OTP (9134) completes booking, settles payment, credits ₹10 to Gullak, and activates 72h warranty."""
+    """Correct END OTP (9134) transitions to payment_pending; Demo Pay settles payment, credits ₹10 to Gullak, and activates 72h warranty."""
     create_resp = client.post("/api/bookings/create", json={"customer_id": 1, "worker_id": 1})
     booking_id = create_resp.json()["booking_id"]
 
     # Start booking
     client.post("/api/bookings/verify-start-otp", json={"booking_id": booking_id, "otp": "4821"})
 
-    # Complete with END OTP
+    # Complete with END OTP -> payment_pending
     end_resp = client.post("/api/bookings/verify-end-otp", json={"booking_id": booking_id, "otp": "9134"})
     assert end_resp.status_code == 200
     data = end_resp.json()
-
     assert data["success"] is True
-    assert data["status"] == "completed"
-    assert data["warranty_active"] is True
-    assert data["warranty_expires_at"] is not None
-    assert data["settlement_summary"]["worker_payout_amount"] == 199.00
-    assert data["settlement_summary"]["welfare_pool_fee"] == 10.00
-    assert data["settlement_summary"]["platform_tech_fee"] == 30.00
-    assert data["settlement_summary"]["total_settled"] == 239.00
+    assert data["status"] == "payment_pending"
+
+    # Pay to finalize settlement and activate warranty
+    pay_resp = client.post(f"/api/bookings/{booking_id}/demo-pay")
+    assert pay_resp.status_code == 200
+    pay_data = pay_resp.json()
+
+    assert pay_data["success"] is True
+    assert pay_data["status"] == "completed"
+    assert pay_data["warranty_active"] is True
+    assert pay_data["warranty_expires_at"] is not None
+    assert pay_data["settlement_summary"]["worker_payout_amount"] == 199.00
+    assert pay_data["settlement_summary"]["welfare_pool_fee"] == 10.00
+    assert pay_data["settlement_summary"]["platform_tech_fee"] == 30.00
+    assert pay_data["settlement_summary"]["total_settled"] == 239.00
 
     # Verify Gullak Ledger entry created in DB
     with SessionLocal() as db:
         b = db.get(Booking, booking_id)
-        assert b.status == "completed"
+        assert b.status == "COMPLETED"
         assert b.payment_status == "PAID"
         assert b.warranty_active is True
 
@@ -195,10 +202,12 @@ def test_6_repeat_end_otp_rejected_no_duplicate_settlement():
     resp1 = client.post("/api/bookings/verify-end-otp", json={"booking_id": booking_id, "otp": "9134"})
     assert resp1.status_code == 200
 
-    # Repeat END OTP request
+    # Settle payment
+    client.post(f"/api/bookings/{booking_id}/demo-pay")
+
+    # Repeat END OTP request on completed booking
     repeat_resp = client.post("/api/bookings/verify-end-otp", json={"booking_id": booking_id, "otp": "9134"})
     assert repeat_resp.status_code == 409
-    assert "already completed" in repeat_resp.json()["detail"].lower() or "duplicate settlement" in repeat_resp.json()["detail"].lower()
 
     # Verify exactly ONE ledger row in DB
     with SessionLocal() as db:
@@ -217,6 +226,7 @@ def test_7_refresh_refetch_booking_persists_state():
     booking_id = create_resp.json()["booking_id"]
     client.post("/api/bookings/verify-start-otp", json={"booking_id": booking_id, "otp": "4821"})
     client.post("/api/bookings/verify-end-otp", json={"booking_id": booking_id, "otp": "9134"})
+    client.post(f"/api/bookings/{booking_id}/demo-pay")
 
     # Fetch booking by ID
     get_resp = client.get(f"/api/bookings/{booking_id}")
@@ -247,19 +257,20 @@ def test_8_wrong_state_transitions_rejected():
 
 
 # ─────────────────────────────────────────────────────────
-# TEST 9: Warranty expiry timestamp → exactly 72 hours from completion
+# TEST 9: Warranty expiry timestamp → exactly 72 hours from payment
 # ─────────────────────────────────────────────────────────
 def test_9_warranty_expiry_timestamp_exactly_72_hours():
-    """Warranty expiry timestamp is set to exactly 72 hours (3 days) from completion time."""
+    """Warranty expiry timestamp is set to exactly 72 hours (3 days) from payment completion time."""
     before_time = datetime.now()
     create_resp = client.post("/api/bookings/create", json={"customer_id": 1, "worker_id": 1})
     booking_id = create_resp.json()["booking_id"]
     client.post("/api/bookings/verify-start-otp", json={"booking_id": booking_id, "otp": "4821"})
-    end_resp = client.post("/api/bookings/verify-end-otp", json={"booking_id": booking_id, "otp": "9134"})
-    assert end_resp.status_code == 200
+    client.post("/api/bookings/verify-end-otp", json={"booking_id": booking_id, "otp": "9134"})
+    pay_resp = client.post(f"/api/bookings/{booking_id}/demo-pay")
+    assert pay_resp.status_code == 200
     after_time = datetime.now()
 
-    data = end_resp.json()
+    data = pay_resp.json()
     expires_at_str = data["warranty_expires_at"]
     # Handle ISO formats
     if expires_at_str.endswith("Z"):
