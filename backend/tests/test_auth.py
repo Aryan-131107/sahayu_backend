@@ -11,10 +11,13 @@ client = TestClient(app)
 def test_unified_register_customer_success():
     """POST /auth/register creates customer and returns valid JWT."""
     from app.database import SessionLocal
-    from app.models import CustomerData
+    from app.models import CustomerData, Booking
     with SessionLocal() as db:
-        db.query(CustomerData).filter(CustomerData.email == "unified.customer@example.com").delete()
-        db.commit()
+        cust = db.query(CustomerData).filter(CustomerData.email == "unified.customer@example.com").first()
+        if cust:
+            db.query(Booking).filter(Booking.customer_id == cust.customer_id).delete()
+            db.delete(cust)
+            db.commit()
 
     payload = {
         "name": "Unified Customer",
@@ -36,10 +39,13 @@ def test_unified_register_customer_success():
 def test_unified_register_worker_success():
     """POST /auth/register creates worker with skills and returns valid JWT."""
     from app.database import SessionLocal
-    from app.models import WorkerData
+    from app.models import WorkerData, Booking
     with SessionLocal() as db:
-        db.query(WorkerData).filter(WorkerData.email == "unified.worker@example.com").delete()
-        db.commit()
+        wrk = db.query(WorkerData).filter(WorkerData.email == "unified.worker@example.com").first()
+        if wrk:
+            db.query(Booking).filter(Booking.worker_id == wrk.worker_id).delete()
+            db.delete(wrk)
+            db.commit()
 
     payload = {
         "name": "Unified Worker",

@@ -7,7 +7,7 @@ LIFECYCLE STATE MACHINE:
   IN_PROGRESS→ COMPLETED
   COMPLETED, REJECTED, CANCELLED → Terminal states
 """
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import date, datetime, timedelta, time
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -32,7 +32,8 @@ from app.core.auth import get_optional_current_user, require_customer, require_w
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 
 VALID_TRANSITIONS = {
-    "PENDING": ["ACCEPTED", "IN_PROGRESS", "REJECTED", "CANCELLED"],
+    "PENDING": ["CONFIRMED", "ACCEPTED", "IN_PROGRESS", "REJECTED", "CANCELLED"],
+    "CONFIRMED": ["ACCEPTED", "IN_PROGRESS", "CANCELLED", "REJECTED"],
     "ACCEPTED": ["IN_PROGRESS", "CANCELLED"],
     "IN_PROGRESS": ["WORK_COMPLETED", "PAYMENT_PENDING", "COMPLETED", "CANCELLED"],
     "WORK_COMPLETED": ["PAYMENT_PENDING", "COMPLETED", "CANCELLED"],
@@ -45,8 +46,8 @@ VALID_TRANSITIONS = {
 
 def _validate_booking_transition(current: str, target: str) -> None:
     """Validate allowed state transitions according to state machine."""
-    current_norm = current.upper()
-    target_norm = target.upper()
+    current_norm = (current or "").upper()
+    target_norm = (target or "").upper()
     allowed = VALID_TRANSITIONS.get(current_norm, [])
     if target_norm not in allowed:
         raise HTTPException(
@@ -56,6 +57,52 @@ def _validate_booking_transition(current: str, target: str) -> None:
                 f"Allowed next states from '{current}': {allowed or 'None (Terminal state)'}."
             ),
         )
+
+
+def _parse_date_safe(val: Any) -> date:
+    """Safely convert date objects or arbitrary strings into valid datetime.date."""
+    if val is None:
+        return date.today()
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str):
+        val_clean = val.strip()
+        if not val_clean or val_clean.lower() in ("today", "now"):
+            return date.today()
+        if val_clean.lower() == "tomorrow":
+            return date.today() + timedelta(days=1)
+        for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%b %d, %Y", "%d %b %Y", "%d-%b-%Y"]:
+            try:
+                return datetime.strptime(val_clean, fmt).date()
+            except ValueError:
+                pass
+    return date.today()
+
+
+def _parse_time_safe(val: Any) -> Optional[time]:
+    """Safely parse time strings like 'Morning', 'Afternoon', '10:00 AM' into datetime.time."""
+    if val is None:
+        return time(10, 0)
+    if isinstance(val, time):
+        return val
+    if isinstance(val, str):
+        val_clean = val.strip().lower()
+        if not val_clean:
+            return time(10, 0)
+        if "morn" in val_clean:
+            return time(10, 0)
+        if "after" in val_clean:
+            return time(14, 0)
+        if "even" in val_clean:
+            return time(18, 0)
+        if "night" in val_clean:
+            return time(20, 0)
+        for fmt in ["%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M%p", "%I %p"]:
+            try:
+                return datetime.strptime(val.strip(), fmt).time()
+            except ValueError:
+                pass
+    return time(10, 0)
 
 
 def _format_quotation_response(q: Quotation) -> QuotationResponse:
@@ -92,44 +139,65 @@ def _format_quotation_response(q: Quotation) -> QuotationResponse:
 
 
 def _format_booking_response(b: Booking) -> BookingResponse:
-    amount_val = float(b.amount) if b.amount is not None else 0.0
+    amount_val = float(b.amount) if b.amount is not None else 239.0
     est_price_val = float(b.estimated_price) if b.estimated_price is not None else amount_val
     lat_val = float(b.service_lat) if b.service_lat is not None else None
     lon_val = float(b.service_lon) if b.service_lon is not None else None
     final_amt = float(b.final_amount) if b.final_amount is not None else float(b.total_amount or amount_val)
+    worker_payout = float(b.worker_payout_amount) if b.worker_payout_amount is not None else 199.00
+    platform_fee = float(b.platform_tech_fee) if b.platform_tech_fee is not None else 30.00
+    welfare_fee = float(b.welfare_pool_fee) if b.welfare_pool_fee is not None else 10.00
+    total_amt = float(b.total_amount) if b.total_amount is not None else amount_val
 
     latest_q = None
     if b.quotations:
         latest_q = _format_quotation_response(b.quotations[-1])
 
+    pricing = BookingPricingBreakdown(
+        worker_payout=worker_payout,
+        platform_tech_fee=platform_fee,
+        welfare_pool_fee=welfare_fee,
+        total_amount=total_amt,
+        currency="INR",
+    )
+
+    ref = f"SH-{b.booking_id:04d}"
+    worker_name = b.worker.name if b.worker else None
+    customer_name = b.customer.name if b.customer else None
+    service_name = b.service.service_name if b.service else None
+
     return BookingResponse(
         booking_id=b.booking_id,
-        booking_reference=f"SH-{b.booking_id:04d}",
+        booking_reference=ref,
         customer_id=b.customer_id,
         worker_id=b.worker_id,
         service_id=b.service_id,
         booking_date=b.booking_date,
         start_time=b.start_time,
         address=b.address,
+        location=b.address,
         description=b.description,
+        service_scope=b.description or service_name,
         amount=amount_val,
         estimated_price=est_price_val,
+        base_amount=amount_val,
         service_lat=lat_val,
         service_lon=lon_val,
-        status=b.status,
-        payment_status=b.payment_status,
+        status=b.status or "CONFIRMED",
+        payment_status=b.payment_status or "PENDING",
         start_otp=b.start_otp or "4821",
         end_otp=b.end_otp or "9134",
+        completion_otp=b.end_otp or "9134",
         start_otp_attempts=b.start_otp_attempts or 0,
         end_otp_attempts=b.end_otp_attempts or 0,
         is_start_otp_locked=bool(b.is_start_otp_locked),
         is_end_otp_locked=bool(b.is_end_otp_locked),
         start_otp_verified_at=b.start_otp_verified_at,
         end_otp_verified_at=b.end_otp_verified_at,
-        worker_payout_amount=float(b.worker_payout_amount) if b.worker_payout_amount is not None else 199.00,
-        platform_tech_fee=float(b.platform_tech_fee) if b.platform_tech_fee is not None else 30.00,
-        welfare_pool_fee=float(b.welfare_pool_fee) if b.welfare_pool_fee is not None else 10.00,
-        total_amount=float(b.total_amount) if b.total_amount is not None else amount_val,
+        worker_payout_amount=worker_payout,
+        platform_tech_fee=platform_fee,
+        welfare_pool_fee=welfare_fee,
+        total_amount=total_amt,
         additional_service_charge=float(b.additional_service_charge or 0.00),
         material_charge=float(b.material_charge or 0.00),
         final_amount=final_amt,
@@ -143,10 +211,12 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         warranty_started_at=b.warranty_started_at,
         warranty_expires_at=b.warranty_expires_at,
         created_at=b.created_at,
-        worker_name=b.worker.name if b.worker else None,
-        customer_name=b.customer.name if b.customer else None,
-        service_name=b.service.service_name if b.service else None,
+        worker_name=worker_name,
+        customer_name=customer_name,
+        service_name=service_name,
         latest_quotation=latest_q,
+        pricing=pricing,
+        message=f"Booking {ref} confirmed successfully. Start PIN locked to 4821.",
     )
 
 
@@ -156,21 +226,29 @@ def _format_booking_response(b: Booking) -> BookingResponse:
     status_code=status.HTTP_201_CREATED,
     summary="Create a new service booking",
 )
+@router.post(
+    "/confirm",
+    response_model=BookingResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Confirm a service booking",
+)
 def create_booking(
     payload: BookingCreate,
     current_user: Optional[AuthUser] = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Create a new booking with comprehensive validation:
-    1. Customer validation (auto-resolved from JWT if omitted)
+    Create or confirm a booking with comprehensive validation:
+    1. Customer validation (auto-resolved from JWT or fallback to demo customer)
     2. Worker validation & active check
     3. Service validation & Skill alignment check
-    4. Double Booking Guard: Rejects overlapping slots for the same worker
+    4. Safe date and time normalization ('Morning' -> 10:00:00)
+    5. Double Booking Guard with Idempotency for repeated confirmation requests
+    6. Non-destructive creation with ₹239 Pay-After-Job structure
     """
     # 1. Resolve & Validate customer
     target_customer_id = payload.customer_id
-    if not target_customer_id:
+    if target_customer_id is None:
         if current_user and current_user.role == "customer":
             target_customer_id = current_user.id
         else:
@@ -191,9 +269,10 @@ def create_booking(
         raise HTTPException(status_code=400, detail=f"Worker {worker.name} is currently inactive.")
 
     # 3. Validate service
-    service = db.get(Service, payload.service_id)
+    service_id = payload.service_id or 1
+    service = db.get(Service, service_id)
     if not service:
-        raise HTTPException(status_code=404, detail=f"Service {payload.service_id} not found.")
+        raise HTTPException(status_code=404, detail=f"Service {service_id} not found.")
 
     # 4. Validate worker has required skill
     has_skill = (
@@ -208,26 +287,45 @@ def create_booking(
             detail=f"Worker {worker.name} does not possess the required skill for this service."
         )
 
-    # 5. DOUBLE BOOKING GUARD: Check for conflicting bookings
-    target_date = payload.booking_date or date.today()
+    # 5. Parse date and time safely
+    target_date = _parse_date_safe(payload.booking_date)
+    parsed_time = _parse_time_safe(payload.start_time)
+
+    # 6. DOUBLE BOOKING GUARD with Idempotency for the same customer
     conflict_query = (
         db.query(Booking)
         .filter(Booking.worker_id == payload.worker_id)
         .filter(Booking.booking_date == target_date)
-        .filter(Booking.status.in_(["PENDING", "ACCEPTED", "IN_PROGRESS"]))
+        .filter(Booking.status.in_(["PENDING", "CONFIRMED", "ACCEPTED", "IN_PROGRESS"]))
     )
-    if payload.start_time:
-        conflict_query = conflict_query.filter(Booking.start_time == payload.start_time)
+    if parsed_time:
+        conflict_query = conflict_query.filter(Booking.start_time == parsed_time)
 
     overlapping_booking = conflict_query.first()
     if overlapping_booking:
-        time_info = f" at {payload.start_time}" if payload.start_time else ""
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Worker {worker.name} is already booked on {target_date}{time_info}. Double booking is prohibited."
-        )
+        if overlapping_booking.customer_id == target_customer_id:
+            # Idempotent re-confirmation: ensure default fields are clean and return
+            overlapping_booking.start_otp = overlapping_booking.start_otp or "4821"
+            overlapping_booking.end_otp = overlapping_booking.end_otp or "9134"
+            overlapping_booking.amount = overlapping_booking.amount or 239.00
+            overlapping_booking.total_amount = overlapping_booking.total_amount or 239.00
+            overlapping_booking.final_amount = overlapping_booking.final_amount or 239.00
+            overlapping_booking.worker_payout_amount = overlapping_booking.worker_payout_amount or 199.00
+            overlapping_booking.platform_tech_fee = overlapping_booking.platform_tech_fee or 30.00
+            overlapping_booking.welfare_pool_fee = overlapping_booking.welfare_pool_fee or 10.00
+            overlapping_booking.payment_status = "PENDING"
+            overlapping_booking.warranty_active = False
+            db.commit()
+            db.refresh(overlapping_booking)
+            return _format_booking_response(overlapping_booking)
+        else:
+            time_info = f" at {parsed_time}" if parsed_time else ""
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Worker {worker.name} is already booked on {target_date}{time_info}. Double booking is prohibited."
+            )
 
-    # 6. Real-time availability check if no explicit slot
+    # 7. Real-time availability check if no explicit slot
     if not payload.booking_date and not payload.start_time:
         avail = db.query(Availability).filter(Availability.worker_id == payload.worker_id).first()
         if avail and not avail.is_available:
@@ -236,21 +334,37 @@ def create_booking(
                 detail=f"Worker {worker.name} is currently unavailable."
             )
 
-    # Create Booking
+    # 8. Create Booking (₹239 Pay-After-Job structure, NO upfront payment)
+    amount_val = float(payload.amount or payload.total_amount or payload.estimated_price or payload.price or 239.00)
     booking = Booking(
         customer_id=target_customer_id,
         worker_id=payload.worker_id,
-        service_id=payload.service_id,
+        service_id=service.service_id,
         booking_date=target_date,
-        start_time=payload.start_time,
-        address=payload.address or customer.address,
-        description=payload.description,
-        amount=payload.amount,
-        estimated_price=payload.amount,
+        start_time=parsed_time,
+        address=payload.address or payload.location or customer.address or "Civil Lines, Jabalpur",
+        description=payload.description or payload.service_scope or service.service_name,
+        amount=amount_val,
+        estimated_price=amount_val,
+        total_amount=amount_val,
+        final_amount=amount_val,
+        worker_payout_amount=199.00,
+        platform_tech_fee=30.00,
+        welfare_pool_fee=10.00,
+        additional_service_charge=0.00,
+        material_charge=0.00,
+        quotation_status="NONE",
         service_lat=payload.service_lat or customer.latitude,
         service_lon=payload.service_lon or customer.longitude,
         status="PENDING",
         payment_status="PENDING",
+        start_otp="4821",
+        end_otp="9134",
+        start_otp_attempts=0,
+        end_otp_attempts=0,
+        is_start_otp_locked=False,
+        is_end_otp_locked=False,
+        warranty_active=False,
     )
     db.add(booking)
     db.commit()
@@ -428,10 +542,64 @@ def get_booking(booking_id: int, db: Session = Depends(get_db)):
     return _format_booking_response(booking)
 
 
+@router.post(
+    "/{booking_id}/confirm",
+    response_model=BookingResponse,
+    summary="Confirm a pending booking by ID (POST)",
+)
+@router.patch(
+    "/{booking_id}/confirm",
+    response_model=BookingResponse,
+    summary="Confirm a pending booking by ID (PATCH)",
+)
+def confirm_booking_by_id(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """Customer or system confirms a booking."""
+    booking = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.customer),
+            joinedload(Booking.worker),
+            joinedload(Booking.service),
+        )
+        .filter(Booking.booking_id == booking_id)
+        .first()
+    )
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
+        raise HTTPException(status_code=403, detail="Cannot confirm another customer's booking.")
+
+    booking.status = "CONFIRMED"
+    booking.payment_status = "PENDING"
+    booking.start_otp = booking.start_otp or "4821"
+    booking.end_otp = booking.end_otp or "9134"
+    booking.amount = booking.amount or 239.00
+    booking.total_amount = booking.total_amount or 239.00
+    booking.final_amount = booking.final_amount or 239.00
+    booking.worker_payout_amount = booking.worker_payout_amount or 199.00
+    booking.platform_tech_fee = booking.platform_tech_fee or 30.00
+    booking.welfare_pool_fee = booking.welfare_pool_fee or 10.00
+    booking.warranty_active = False
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/accept",
+    response_model=BookingResponse,
+    summary="Worker accepts a pending booking (POST)",
+)
 @router.patch(
     "/{booking_id}/accept",
     response_model=BookingResponse,
-    summary="Worker accepts a pending booking",
+    summary="Worker accepts a pending booking (PATCH)",
 )
 def accept_booking(
     booking_id: int,
@@ -459,10 +627,15 @@ def accept_booking(
     return _format_booking_response(booking)
 
 
+@router.post(
+    "/{booking_id}/reject",
+    response_model=BookingResponse,
+    summary="Worker rejects a pending booking (POST)",
+)
 @router.patch(
     "/{booking_id}/reject",
     response_model=BookingResponse,
-    summary="Worker rejects a pending booking",
+    summary="Worker rejects a pending booking (PATCH)",
 )
 def reject_booking(
     booking_id: int,
@@ -485,10 +658,15 @@ def reject_booking(
     return _format_booking_response(booking)
 
 
+@router.post(
+    "/{booking_id}/start",
+    response_model=BookingResponse,
+    summary="Worker starts work (POST)",
+)
 @router.patch(
     "/{booking_id}/start",
     response_model=BookingResponse,
-    summary="Worker starts work (IN_PROGRESS)",
+    summary="Worker starts work (PATCH)",
 )
 def start_booking(
     booking_id: int,
@@ -511,10 +689,15 @@ def start_booking(
     return _format_booking_response(booking)
 
 
+@router.post(
+    "/{booking_id}/complete",
+    response_model=BookingResponse,
+    summary="Complete a booking (Marks PAID & Frees Worker) (POST)",
+)
 @router.patch(
     "/{booking_id}/complete",
     response_model=BookingResponse,
-    summary="Complete a booking (Marks PAID & Frees Worker)",
+    summary="Complete a booking (Marks PAID & Frees Worker) (PATCH)",
 )
 def complete_booking(
     booking_id: int,
@@ -543,10 +726,15 @@ def complete_booking(
     return _format_booking_response(booking)
 
 
+@router.post(
+    "/{booking_id}/cancel",
+    response_model=BookingResponse,
+    summary="Cancel a booking (POST)",
+)
 @router.patch(
     "/{booking_id}/cancel",
     response_model=BookingResponse,
-    summary="Cancel a booking",
+    summary="Cancel a booking (PATCH)",
 )
 def cancel_booking(
     booking_id: int,
@@ -957,7 +1145,7 @@ def create_dual_otp_booking(
 ):
     """
     Initializes a new booking adhering to Slide 3 core business logic:
-    - Sets status to 'pending'
+    - Sets status to 'pending' / 'CONFIRMED'
     - Locks Start PIN to '4821' and End PIN to '9134' (demo predictability)
     - Transparent pricing: ₹199 worker payout, ₹30 platform tech fee, ₹10 society gullak, total ₹239
     - Returns booking reference (e.g. 'SH-0060') and pricing breakdown
@@ -973,7 +1161,12 @@ def create_dual_otp_booking(
 
     customer = db.get(CustomerData, target_customer_id)
     if not customer:
-        raise HTTPException(status_code=404, detail=f"Customer {target_customer_id} not found.")
+        first_cust = db.query(CustomerData).first()
+        if first_cust:
+            customer = first_cust
+            target_customer_id = customer.customer_id
+        else:
+            raise HTTPException(status_code=404, detail=f"Customer {target_customer_id} not found.")
 
     # 2. Validate worker
     worker = db.get(WorkerData, payload.worker_id)
@@ -981,33 +1174,57 @@ def create_dual_otp_booking(
         raise HTTPException(status_code=404, detail=f"Worker {payload.worker_id} not found.")
 
     # 3. Resolve service
-    service_id = payload.service_id or 1
-    service = db.get(Service, service_id)
+    service_id = payload.service_id
+    service = None
+    if service_id:
+        service = db.get(Service, service_id)
     if not service:
-        first_svc = db.query(Service).first()
-        service = first_svc
-        service_id = first_svc.service_id if first_svc else 1
+        desc = (payload.description or payload.service_scope or "").lower()
+        if "ac" in desc:
+            service = db.query(Service).filter(Service.service_name.ilike("%AC%")).first()
+        elif "clean" in desc:
+            service = db.query(Service).filter(Service.service_name.ilike("%Clean%")).first()
+        elif "paint" in desc:
+            service = db.query(Service).filter(Service.service_name.ilike("%Paint%")).first()
+        elif "plumb" in desc or "pipe" in desc:
+            service = db.query(Service).filter(Service.service_name.ilike("%Pipe%")).first()
+        elif "carpent" in desc or "furniture" in desc:
+            service = db.query(Service).filter(Service.service_name.ilike("%Furniture%")).first()
+
+        if not service:
+            service = db.query(Service).first()
+        service_id = service.service_id if service else 1
+
+    target_date = _parse_date_safe(payload.booking_date)
+    parsed_time = _parse_time_safe(payload.start_time)
+    amount_val = float(payload.amount or payload.total_amount or payload.estimated_price or payload.price or 239.00)
 
     # 4. Create booking with Dual-OTP & Slide 3 pricing parameters
     booking = Booking(
         customer_id=target_customer_id,
         worker_id=payload.worker_id,
         service_id=service_id,
-        booking_date=payload.booking_date or date.today(),
-        start_time=payload.start_time or time(10, 0),
-        address=payload.location or "Civil Lines, Jabalpur",
-        description=payload.service_scope or "Electrical Inspection & Fault Diagnosis",
-        estimated_price=239.00,
-        amount=239.00,
+        booking_date=target_date,
+        start_time=parsed_time or time(10, 0),
+        address=payload.location or payload.address or customer.address or "Civil Lines, Jabalpur",
+        description=payload.service_scope or payload.description or (service.service_name if service else "Service Inspection"),
+        estimated_price=amount_val,
+        amount=amount_val,
         status="pending",
         payment_status="PENDING",
         start_otp="4821",
         end_otp="9134",
+        start_otp_attempts=0,
+        end_otp_attempts=0,
+        is_start_otp_locked=False,
+        is_end_otp_locked=False,
         worker_payout_amount=199.00,
         platform_tech_fee=30.00,
         welfare_pool_fee=10.00,
-        total_amount=239.00,
-        final_amount=239.00,
+        total_amount=amount_val,
+        final_amount=amount_val,
+        additional_service_charge=0.00,
+        material_charge=0.00,
         quotation_status="NONE",
         warranty_active=False,
     )
@@ -1021,7 +1238,7 @@ def create_dual_otp_booking(
         worker_payout=199.00,
         platform_tech_fee=30.00,
         welfare_pool_fee=10.00,
-        total_amount=239.00,
+        total_amount=amount_val,
         currency="INR",
     )
 
@@ -1029,17 +1246,36 @@ def create_dual_otp_booking(
         booking_id=booking.booking_id,
         booking_reference=ref,
         status="pending",
+        payment_status="PENDING",
         customer_id=booking.customer_id,
         worker_id=booking.worker_id,
-        service_scope=payload.service_scope or "Electrical Inspection & Fault Diagnosis",
-        location=payload.location or "Civil Lines, Jabalpur",
+        service_id=booking.service_id,
+        service_scope=payload.service_scope or (service.service_name if service else "Service Inspection"),
+        service_name=service.service_name if service else None,
+        worker_name=worker.name,
+        customer_name=customer.name,
+        location=payload.location or payload.address or "Civil Lines, Jabalpur",
+        address=payload.address or payload.location or "Civil Lines, Jabalpur",
+        description=booking.description,
+        booking_date=booking.booking_date,
+        start_time=booking.start_time,
         start_otp="4821",
         end_otp="9134",
+        completion_otp="9134",
+        amount=amount_val,
+        estimated_price=amount_val,
+        base_amount=amount_val,
+        total_amount=amount_val,
+        final_amount=amount_val,
+        worker_payout_amount=199.00,
+        platform_tech_fee=30.00,
+        welfare_pool_fee=10.00,
+        additional_service_charge=0.00,
+        material_charge=0.00,
+        quotation_status="NONE",
         pricing=pricing,
         warranty_active=False,
         created_at=booking.created_at,
-        worker_name=worker.name,
-        customer_name=customer.name,
         message=f"Booking {ref} created successfully. Start PIN locked to 4821.",
     )
 
