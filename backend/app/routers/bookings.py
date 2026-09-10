@@ -259,6 +259,38 @@ def create_booking(
 
 
 @router.get(
+    "",
+    response_model=List[BookingResponse],
+    summary="List all bookings with optional filters",
+)
+def list_bookings(
+    status: Optional[str] = Query(None, description="Optional status filter"),
+    customer_id: Optional[int] = Query(None, description="Optional customer filter"),
+    worker_id: Optional[int] = Query(None, description="Optional worker filter"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """List bookings with optional status, customer, or worker filters."""
+    query = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.customer),
+            joinedload(Booking.worker),
+            joinedload(Booking.service),
+        )
+    )
+    if status:
+        query = query.filter(func.upper(Booking.status) == status.upper())
+    if customer_id:
+        query = query.filter(Booking.customer_id == customer_id)
+    if worker_id:
+        query = query.filter(Booking.worker_id == worker_id)
+
+    bookings = query.order_by(Booking.booking_id.desc()).limit(limit).all()
+    return [_format_booking_response(b) for b in bookings]
+
+
+@router.get(
     "/customer/me",
     response_model=List[BookingResponse],
     summary="Get booking history for currently logged-in customer",
