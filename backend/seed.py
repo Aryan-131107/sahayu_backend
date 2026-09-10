@@ -26,10 +26,50 @@ def seed_database():
     print("  Sahayu Database Seeder (PostgreSQL / Supabase)")
     print("=" * 60)
     
-    # Ensure tables exist without dropping existing schema
+    # Ensure tables and columns exist without dropping existing schema
     try:
         Base.metadata.create_all(bind=engine)
-        print("[OK] Verified database tables exist.")
+        with engine.connect() as conn:
+            conn.execute(text("""
+                -- Worker Data verification columns
+                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS shramik_id VARCHAR(50);
+                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS skill_certificate VARCHAR(255);
+                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS verification_status VARCHAR(20) NOT NULL DEFAULT 'VERIFIED';
+                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS verification_type VARCHAR(50) DEFAULT 'DEMO_SHRAMIK';
+                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP;
+
+                -- Services is_active
+                ALTER TABLE services ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+
+                -- Bookings columns for Dual-OTP, Pricing Breakdown, Quotation & Settlement Lifecycle
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS start_otp VARCHAR(6) DEFAULT '4821';
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS end_otp VARCHAR(6) DEFAULT '9134';
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS start_otp_attempts INT DEFAULT 0;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS end_otp_attempts INT DEFAULT 0;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_start_otp_locked BOOLEAN DEFAULT FALSE;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_end_otp_locked BOOLEAN DEFAULT FALSE;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS start_otp_verified_at TIMESTAMP;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS end_otp_verified_at TIMESTAMP;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS last_otp_attempt_at TIMESTAMP;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS worker_payout_amount NUMERIC(10, 2) DEFAULT 199.00;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS platform_tech_fee NUMERIC(10, 2) DEFAULT 30.00;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS welfare_pool_fee NUMERIC(10, 2) DEFAULT 10.00;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_amount NUMERIC(10, 2) DEFAULT 239.00;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS additional_service_charge NUMERIC(10, 2) DEFAULT 0.00;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS material_charge NUMERIC(10, 2) DEFAULT 0.00;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS final_amount NUMERIC(10, 2) DEFAULT 239.00;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS quotation_status VARCHAR(30) DEFAULT 'NONE';
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_approved_at TIMESTAMP;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS work_completed_at TIMESTAMP;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_reference VARCHAR(100);
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_completed_at TIMESTAMP;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS settled_at TIMESTAMP;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS warranty_active BOOLEAN DEFAULT FALSE;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS warranty_started_at TIMESTAMP;
+                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS warranty_expires_at TIMESTAMP;
+            """))
+            conn.commit()
+        print("[OK] Verified database tables and extended columns exist.")
     except Exception as e:
         print(f"[WARNING] Table verification warning: {e}")
 
