@@ -57,16 +57,16 @@ def test_detect_audio_metadata_wav():
 
 
 def test_detect_audio_metadata_webm_and_ogg():
-    """WebM and OGG headers/content-types are correctly detected."""
+    """WebM and OGG headers/content-types are correctly detected with standard browser 48kHz rate."""
     webm_header = b"\x1aE\xdf\xa3" + b"\x00" * 30
     fmt, rate = bhashini_service.detect_audio_metadata(webm_header, "audio/webm")
     assert fmt == "webm"
-    assert rate == 16000
+    assert rate == 48000
 
     ogg_header = b"OggS" + b"\x00" * 30
     fmt_ogg, rate_ogg = bhashini_service.detect_audio_metadata(ogg_header, "audio/ogg; codecs=opus")
     assert fmt_ogg == "ogg"
-    assert rate_ogg == 16000
+    assert rate_ogg == 48000
 
 
 def test_detect_audio_metadata_empty_or_fallback():

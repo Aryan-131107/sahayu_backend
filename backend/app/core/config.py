@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # ── Bhashini AI Configuration ───────────────────────────
     BHASHINI_USER_ID: str = ""
     BHASHINI_ULCA_API_KEY: str = ""
-    BHASHINI_PIPELINE_ID: str = "64392f96daac500b55c543cd"
+    BHASHINI_PIPELINE_ID: str = "660fa5bec7fb5b0328229016"
     BHASHINI_CONFIG_URL: str = "https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/getModelsPipeline"
 
     @field_validator("DATABASE_URL", mode="after")

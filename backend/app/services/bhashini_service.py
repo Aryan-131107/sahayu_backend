@@ -83,11 +83,11 @@ def detect_audio_metadata(audio_bytes: bytes, content_type: Optional[str] = None
 
     # 2. WebM / Matroska (EBML header \x1aE\xdf\xa3)
     if header.startswith(b"\x1aE\xdf\xa3") or "webm" in ct:
-        return "webm", 16000
+        return "webm", 48000
 
     # 3. OGG / Opus / Vorbis (OggS)
     if header.startswith(b"OggS") or "ogg" in ct or "opus" in ct:
-        return "ogg", 16000
+        return "ogg", 48000
 
     # 4. MP3 (ID3 tag or MPEG audio frame sync 0xFF 0xFB/0xF3/0xF2)
     if header.startswith(b"ID3") or (len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0) or "mp3" in ct or "mpeg" in ct:
@@ -103,9 +103,9 @@ def detect_audio_metadata(audio_bytes: bytes, content_type: Optional[str] = None
 
     # Default fallback based on content-type or wav
     if "webm" in ct:
-        return "webm", 16000
+        return "webm", 48000
     elif "ogg" in ct:
-        return "ogg", 16000
+        return "ogg", 48000
     elif "mp3" in ct:
         return "mp3", 44100
 
@@ -125,7 +125,7 @@ async def fetch_pipeline_config(
     """
     user_id = (settings.BHASHINI_USER_ID or os.getenv("BHASHINI_USER_ID", "")).strip()
     ulca_key = (settings.BHASHINI_ULCA_API_KEY or os.getenv("BHASHINI_ULCA_API_KEY", "")).strip()
-    pipeline_id = (settings.BHASHINI_PIPELINE_ID or os.getenv("BHASHINI_PIPELINE_ID", "64392f96daac500b55c543cd")).strip()
+    pipeline_id = (settings.BHASHINI_PIPELINE_ID or os.getenv("BHASHINI_PIPELINE_ID", "660fa5bec7fb5b0328229016")).strip()
     config_url = (settings.BHASHINI_CONFIG_URL or "https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/getModelsPipeline").strip()
 
     if not user_id or not ulca_key:
@@ -266,6 +266,7 @@ async def transcribe_speech(
 
     audio_format, sampling_rate = detect_audio_metadata(audio_bytes, content_type)
     base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+    logger.info(f"[Bhashini ASR] Audio metadata detected: format='{audio_format}', samplingRate={sampling_rate}, bytes={len(audio_bytes)}")
 
     compute_payload = {
         "pipelineTasks": [
@@ -311,8 +312,9 @@ async def transcribe_speech(
             json=compute_payload,
             headers=inference_headers,
         )
+        logger.info(f"[Bhashini ASR] Compute inference responded with status HTTP {response.status_code}")
         if response.status_code != 200:
-            logger.error(f"Bhashini ASR compute failed with status {response.status_code}: {response.text}")
+            logger.error(f"[Bhashini ASR] Compute failed with status {response.status_code}: {response.text}")
             return {
                 "success": False,
                 "error": "Speech transcription failed. Please speak clearly and try again.",
@@ -320,7 +322,7 @@ async def transcribe_speech(
 
         result = response.json()
     except Exception as e:
-        logger.error(f"Error during ASR compute call: {e}")
+        logger.error(f"[Bhashini ASR] Network error or timeout during compute call: {e}")
         return {
             "success": False,
             "error": "Voice service request timed out or network error occurred.",
@@ -329,33 +331,66 @@ async def transcribe_speech(
         if should_close_client:
             await client.aclose()
 
-    # Extract recognized transcript
+    # Extract recognized transcript across all possible ULCA field variants
     transcript = ""
+    candidate_keys = ["source", "target", "text", "transcript", "transcription", "prediction", "sourceText", "recognized_text"]
+
     try:
         pipeline_resp = result.get("pipelineResponse", [])
         for task in pipeline_resp:
-            if task.get("taskType") == "asr":
+            if task.get("taskType") == "asr" or "output" in task:
                 outputs = task.get("output", [])
                 if outputs and isinstance(outputs, list):
-                    first_out = outputs[0]
-                    transcript = first_out.get("source", "") or first_out.get("target", "")
+                    for out_item in outputs:
+                        if isinstance(out_item, dict):
+                            for key in candidate_keys:
+                                val = out_item.get(key)
+                                if val and isinstance(val, str) and val.strip():
+                                    transcript = val.strip()
+                                    break
+                        elif isinstance(out_item, str) and out_item.strip():
+                            transcript = out_item.strip()
+                        if transcript:
+                            break
                 elif isinstance(outputs, dict):
-                    transcript = outputs.get("source", "")
+                    for key in candidate_keys:
+                        val = outputs.get(key)
+                        if val and isinstance(val, str) and val.strip():
+                            transcript = val.strip()
+                            break
+            if transcript:
                 break
 
-        if not transcript and pipeline_resp:
-            first_task = pipeline_resp[0]
-            outputs = first_task.get("output", [])
-            if outputs:
-                transcript = outputs[0].get("source", "")
+        # Fallback check direct output/payload fields
+        if not transcript:
+            direct_output = result.get("output", [])
+            if isinstance(direct_output, list) and direct_output:
+                first_d = direct_output[0]
+                if isinstance(first_d, dict):
+                    for key in candidate_keys:
+                        val = first_d.get(key)
+                        if val and isinstance(val, str) and val.strip():
+                            transcript = val.strip()
+                            break
+                elif isinstance(first_d, str):
+                    transcript = first_d.strip()
     except Exception as e:
-        logger.error(f"Failed to parse ASR response transcript: {e}")
+        logger.error(f"[Bhashini ASR] Failed to parse response transcript structure: {e}")
         return {
             "success": False,
             "error": "Failed to extract recognized text from voice response.",
         }
 
     transcript = transcript.strip() if transcript else ""
+
+    if not transcript:
+        logger.info("[Bhashini ASR] Audio recognized without error but returned empty transcript.")
+        return {
+            "success": False,
+            "error": "Could not understand audio. Please speak clearly in Hindi.",
+        }
+
+    logger.info(f"[Bhashini ASR] Successfully transcribed {len(transcript)} characters")
     return {
         "success": True,
         "text": transcript,
