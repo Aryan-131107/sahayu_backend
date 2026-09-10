@@ -118,3 +118,27 @@ def test_confirm_service_booking_ac_servicing_santosh_mishra():
     assert pay_data["amount_paid"] == 239.00 + total_added
     assert pay_data["warranty_active"] is True
     assert pay_data["settlement_summary"]["welfare_gullak_credited"] == 10.00
+
+
+def test_rate_card_and_welfare_endpoints_not_shadowed_by_booking_id():
+    """Verify that static endpoints (/rate-card, /welfare-fund/summary) are not intercepted by /{booking_id}."""
+    # 1. Test GET /api/bookings/rate-card
+    rc_resp = client.get("/api/bookings/rate-card?skill_id=9")
+    assert rc_resp.status_code == 200
+    assert rc_resp.json()["skill_id"] == 9
+    assert len(rc_resp.json()["items"]) > 0
+
+    # 2. Test GET /bookings/rate-card (direct root)
+    rc_root_resp = client.get("/bookings/rate-card?skill_id=9")
+    assert rc_root_resp.status_code == 200
+    assert rc_root_resp.json()["skill_id"] == 9
+
+    # 3. Test GET /api/bookings/welfare-fund/summary
+    wf_resp = client.get("/api/bookings/welfare-fund/summary")
+    assert wf_resp.status_code == 200
+    assert "total_gullak_reserve" in wf_resp.json()
+
+    # 4. Test GET /api/bookings/1 (parameterized)
+    b_resp = client.get("/api/bookings/1")
+    assert b_resp.status_code == 200
+    assert b_resp.json()["booking_id"] == 1

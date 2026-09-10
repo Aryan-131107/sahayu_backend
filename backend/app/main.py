@@ -5,9 +5,11 @@ SIH 2026 Problem Statement 26089
 
 from contextlib import asynccontextmanager
 from typing import List
-from fastapi import FastAPI, Depends, APIRouter
+from fastapi import FastAPI, Depends, APIRouter, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+import traceback
 
 from app.core.config import settings
 from app.database import verify_connection, get_db
@@ -59,6 +61,17 @@ An explainable, transparent, and fair gig services recommendation system for hou
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print(f"[UNHANDLED EXCEPTION on {request.method} {request.url.path}]: {tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "error": str(exc), "traceback": tb.splitlines()[-6:]}
+    )
+
 
 # ── CORS Middleware ──────────────────────────────────────────────────
 app.add_middleware(

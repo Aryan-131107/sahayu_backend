@@ -520,254 +520,8 @@ def get_worker_bookings(
     return [_format_booking_response(b) for b in bookings]
 
 
-@router.get(
-    "/{booking_id}",
-    response_model=BookingResponse,
-    summary="Get single booking by ID",
-)
-def get_booking(booking_id: int, db: Session = Depends(get_db)):
-    """Retrieve full booking details."""
-    booking = (
-        db.query(Booking)
-        .options(
-            joinedload(Booking.customer),
-            joinedload(Booking.worker),
-            joinedload(Booking.service),
-        )
-        .filter(Booking.booking_id == booking_id)
-        .first()
-    )
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/confirm",
-    response_model=BookingResponse,
-    summary="Confirm a pending booking by ID (POST)",
-)
-@router.patch(
-    "/{booking_id}/confirm",
-    response_model=BookingResponse,
-    summary="Confirm a pending booking by ID (PATCH)",
-)
-def confirm_booking_by_id(
-    booking_id: int,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    """Customer or system confirms a booking."""
-    booking = (
-        db.query(Booking)
-        .options(
-            joinedload(Booking.customer),
-            joinedload(Booking.worker),
-            joinedload(Booking.service),
-        )
-        .filter(Booking.booking_id == booking_id)
-        .first()
-    )
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
-        raise HTTPException(status_code=403, detail="Cannot confirm another customer's booking.")
-
-    booking.status = "CONFIRMED"
-    booking.payment_status = "PENDING"
-    booking.start_otp = booking.start_otp or "4821"
-    booking.end_otp = booking.end_otp or "9134"
-    booking.amount = booking.amount or 239.00
-    booking.total_amount = booking.total_amount or 239.00
-    booking.final_amount = booking.final_amount or 239.00
-    booking.worker_payout_amount = booking.worker_payout_amount or 199.00
-    booking.platform_tech_fee = booking.platform_tech_fee or 30.00
-    booking.welfare_pool_fee = booking.welfare_pool_fee or 10.00
-    booking.warranty_active = False
-
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/accept",
-    response_model=BookingResponse,
-    summary="Worker accepts a pending booking (POST)",
-)
-@router.patch(
-    "/{booking_id}/accept",
-    response_model=BookingResponse,
-    summary="Worker accepts a pending booking (PATCH)",
-)
-def accept_booking(
-    booking_id: int,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    """Worker accepts booking, automatically locking worker availability."""
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
-        raise HTTPException(status_code=403, detail="Cannot accept a booking assigned to another worker.")
-
-    _validate_booking_transition(booking.status, "ACCEPTED")
-    booking.status = "ACCEPTED"
-
-    # Toggle real-time availability to busy
-    avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
-    if avail:
-        avail.is_available = False
-
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/reject",
-    response_model=BookingResponse,
-    summary="Worker rejects a pending booking (POST)",
-)
-@router.patch(
-    "/{booking_id}/reject",
-    response_model=BookingResponse,
-    summary="Worker rejects a pending booking (PATCH)",
-)
-def reject_booking(
-    booking_id: int,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    """Worker rejects pending booking."""
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
-        raise HTTPException(status_code=403, detail="Cannot reject a booking assigned to another worker.")
-
-    _validate_booking_transition(booking.status, "REJECTED")
-    booking.status = "REJECTED"
-
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/start",
-    response_model=BookingResponse,
-    summary="Worker starts work (POST)",
-)
-@router.patch(
-    "/{booking_id}/start",
-    response_model=BookingResponse,
-    summary="Worker starts work (PATCH)",
-)
-def start_booking(
-    booking_id: int,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    """Worker starts active job execution."""
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
-        raise HTTPException(status_code=403, detail="Cannot start a booking assigned to another worker.")
-
-    _validate_booking_transition(booking.status, "IN_PROGRESS")
-    booking.status = "IN_PROGRESS"
-
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/complete",
-    response_model=BookingResponse,
-    summary="Complete a booking (Marks PAID & Frees Worker) (POST)",
-)
-@router.patch(
-    "/{booking_id}/complete",
-    response_model=BookingResponse,
-    summary="Complete a booking (Marks PAID & Frees Worker) (PATCH)",
-)
-def complete_booking(
-    booking_id: int,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    """Marks booking as completed, marks payment paid, and frees up worker availability."""
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
-        raise HTTPException(status_code=403, detail="Cannot complete a booking assigned to another worker.")
-
-    _validate_booking_transition(booking.status, "COMPLETED")
-    booking.status = "COMPLETED"
-    booking.payment_status = "PAID"
-
-    # Free up worker
-    avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
-    if avail:
-        avail.is_available = True
-
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/cancel",
-    response_model=BookingResponse,
-    summary="Cancel a booking (POST)",
-)
-@router.patch(
-    "/{booking_id}/cancel",
-    response_model=BookingResponse,
-    summary="Cancel a booking (PATCH)",
-)
-def cancel_booking(
-    booking_id: int,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    """Cancels PENDING or ACCEPTED booking. Frees worker if was accepted."""
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user:
-        if current_user.role == "customer" and current_user.id != booking.customer_id:
-            raise HTTPException(status_code=403, detail="Cannot cancel another customer's booking.")
-        if current_user.role == "worker" and current_user.id != booking.worker_id:
-            raise HTTPException(status_code=403, detail="Cannot cancel another worker's booking.")
-
-    _validate_booking_transition(booking.status, "CANCELLED")
-    was_accepted = booking.status == "ACCEPTED"
-    booking.status = "CANCELLED"
-
-    if was_accepted:
-        avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
-        if avail:
-            avail.is_available = True
-
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
 # ─────────────────────────────────────────────────────────
-# RATE CARD & ON-SITE QUOTATION ENDPOINTS
+# STATIC & SUB-PATH BOOKING ENDPOINTS (MUST PRECEDE /{booking_id})
 # ─────────────────────────────────────────────────────────
 
 @router.get(
@@ -811,326 +565,54 @@ def get_rate_card_by_skill(
 
 
 @router.get(
-    "/{booking_id}/rate-card",
-    response_model=RateCardListResponse,
-    summary="Get trade-specific rate card items for a booking",
+    "/welfare-fund/summary",
+    response_model=WelfareMetricsResponse,
+    summary="Get Society Welfare Gullak Reserve Fund Summary (Slide 3 Welfare DB)",
 )
-def get_booking_rate_card(
-    booking_id: int,
+def get_welfare_fund_summary(
+    society_id: int = Query(1, description="Cooperative Society ID"),
     db: Session = Depends(get_db),
 ):
     """
-    Fetches strictly the trade-specific rate card items belonging to the booking's skill.
-    Prevents skill-card mismatch (e.g. Painting job never sees MCB/Capacitor).
+    Queries cooperative_welfare_ledger for the specified society.
+    Aggregates total reserve balance (CREDIT - DEBIT) and count of contributions.
     """
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    service = booking.service or db.get(Service, booking.service_id)
-    skill_id = service.skill_id if service else 1
-    skill = db.get(Skill, skill_id)
-
-    items = (
-        db.query(RateCardItem)
-        .filter(RateCardItem.skill_id == skill_id, RateCardItem.is_active == True)
-        .order_by(RateCardItem.category, RateCardItem.item_name)
-        .all()
-    )
-
-    return RateCardListResponse(
-        skill_id=skill_id,
-        skill_name=skill.skill_name if skill else None,
-        service_id=service.service_id if service else None,
-        service_name=service.service_name if service else None,
-        items=[
-            RateCardItemResponse(
-                item_id=it.item_id,
-                skill_id=it.skill_id,
-                service_id=it.service_id,
-                item_name=it.item_name,
-                category=it.category,
-                unit_rate=float(it.unit_rate),
-                unit=it.unit,
-                description=it.description,
-                is_active=it.is_active,
-            )
-            for it in items
-        ],
-    )
-
-
-@router.post(
-    "/{booking_id}/quotation",
-    response_model=QuotationResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Worker submits on-site quotation for additional labor and parts",
-)
-def create_quotation(
-    booking_id: int,
-    payload: QuotationCreateRequest,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Worker submits on-site quotation:
-    - Validates items belong to booking's skill category (rejects cross-trade items)
-    - Authoritative database pricing (rejects arbitrary frontend prices)
-    - Sets quotation to QUOTE_PENDING
-    """
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
-        raise HTTPException(status_code=403, detail="Cannot submit quotation for a booking assigned to another worker.")
-
-    service = booking.service or db.get(Service, booking.service_id)
-    skill_id = service.skill_id if service else 1
-
-    if not payload.items:
-        raise HTTPException(status_code=400, detail="Quotation must contain at least one item.")
-
-    labor_total = Decimal("0.00")
-    material_total = Decimal("0.00")
-    validated_items = []
-
-    for item_req in payload.items:
-        rc_item = db.get(RateCardItem, item_req.rate_card_item_id)
-        if not rc_item or not rc_item.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Rate card item {item_req.rate_card_item_id} not found or inactive.",
-            )
-        if rc_item.skill_id != skill_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"Rate card item '{rc_item.item_name}' belongs to skill ID {rc_item.skill_id}, "
-                    f"which does not match booking trade skill ID {skill_id}."
-                ),
-            )
-        qty = max(1, item_req.quantity)
-        amt = Decimal(str(rc_item.unit_rate)) * qty
-        if rc_item.category.upper() == "LABOR":
-            labor_total += amt
-        else:
-            material_total += amt
-        validated_items.append((rc_item, qty, float(amt)))
-
-    total_add = labor_total + material_total
-    now = datetime.now()
-
-    quote = Quotation(
-        booking_id=booking_id,
-        worker_id=booking.worker_id,
-        status="QUOTE_PENDING",
-        additional_labor_charge=float(labor_total),
-        additional_material_charge=float(material_total),
-        total_additional_amount=float(total_add),
-        worker_notes=payload.worker_notes,
-        submitted_at=now,
-    )
-    db.add(quote)
-    db.flush()
-
-    for rc_item, qty, amt in validated_items:
-        qi = QuotationItem(
-            quotation_id=quote.quotation_id,
-            rate_card_item_id=rc_item.item_id,
-            item_name=rc_item.item_name,
-            category=rc_item.category,
-            unit_rate=float(rc_item.unit_rate),
-            quantity=qty,
-            total_amount=amt,
+    credit_sum = (
+        db.query(func.coalesce(func.sum(CooperativeWelfareLedger.amount), 0.0))
+        .filter(
+            CooperativeWelfareLedger.society_id == society_id,
+            CooperativeWelfareLedger.entry_type == "CREDIT"
         )
-        db.add(qi)
-
-    booking.quotation_status = "QUOTE_PENDING"
-    db.commit()
-    db.refresh(quote)
-    return _format_quotation_response(quote)
-
-
-@router.get(
-    "/{booking_id}/quotation",
-    response_model=Optional[QuotationResponse],
-    summary="Get latest quotation for a booking",
-)
-def get_booking_quotation(
-    booking_id: int,
-    db: Session = Depends(get_db),
-):
-    quote = (
-        db.query(Quotation)
-        .filter(Quotation.booking_id == booking_id)
-        .order_by(Quotation.quotation_id.desc())
-        .first()
+        .scalar()
     )
-    if not quote:
-        return None
-    return _format_quotation_response(quote)
-
-
-@router.post(
-    "/{booking_id}/quotation/approve",
-    response_model=BookingResponse,
-    summary="Customer approves quotation",
-)
-def approve_quotation(
-    booking_id: int,
-    payload: Optional[QuotationApprovalRequest] = None,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
-        raise HTTPException(status_code=403, detail="Cannot approve quotation for another customer's booking.")
-
-    quote = (
-        db.query(Quotation)
-        .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_PENDING")
-        .order_by(Quotation.quotation_id.desc())
-        .first()
+    debit_sum = (
+        db.query(func.coalesce(func.sum(CooperativeWelfareLedger.amount), 0.0))
+        .filter(
+            CooperativeWelfareLedger.society_id == society_id,
+            CooperativeWelfareLedger.entry_type == "DEBIT"
+        )
+        .scalar()
     )
-    if not quote:
-        raise HTTPException(status_code=404, detail="No pending quotation found for this booking.")
+    total_balance = float(credit_sum) - float(debit_sum)
 
-    now = datetime.now()
-    quote.status = "QUOTE_APPROVED"
-    quote.approved_at = now
-    if payload and payload.customer_notes:
-        quote.customer_notes = payload.customer_notes
-
-    # Update booking with approved quotation amounts
-    base_charge = 239.00
-    total_additional = float(quote.total_additional_amount)
-    final_total = round(base_charge + total_additional, 2)
-
-    booking.quotation_status = "QUOTE_APPROVED"
-    booking.customer_approved_at = now
-    booking.additional_service_charge = float(quote.additional_labor_charge)
-    booking.material_charge = float(quote.additional_material_charge)
-    booking.final_amount = final_total
-    booking.total_amount = final_total
-    booking.worker_payout_amount = round(199.00 + float(quote.additional_labor_charge) + float(quote.additional_material_charge), 2)
-
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/quotation/reject",
-    response_model=BookingResponse,
-    summary="Customer rejects quotation",
-)
-def reject_quotation(
-    booking_id: int,
-    payload: Optional[QuotationRejectionRequest] = None,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
-        raise HTTPException(status_code=403, detail="Cannot reject quotation for another customer's booking.")
-
-    quote = (
-        db.query(Quotation)
-        .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_PENDING")
-        .order_by(Quotation.quotation_id.desc())
-        .first()
+    contributions_count = (
+        db.query(CooperativeWelfareLedger)
+        .filter(
+            CooperativeWelfareLedger.society_id == society_id,
+            CooperativeWelfareLedger.entry_type == "CREDIT"
+        )
+        .count()
     )
-    if not quote:
-        raise HTTPException(status_code=404, detail="No pending quotation found for this booking.")
 
-    now = datetime.now()
-    quote.status = "QUOTE_REJECTED"
-    quote.rejected_at = now
-    if payload and payload.customer_notes:
-        quote.customer_notes = payload.customer_notes
+    return WelfareMetricsResponse(
+        society_id=society_id,
+        total_gullak_reserve=round(total_balance, 2),
+        total_contributions_count=contributions_count,
+        governing_body="Jabalpur District Cooperative Federation",
+        currency="INR",
+        last_updated=datetime.now(),
+    )
 
-    booking.quotation_status = "QUOTE_REJECTED"
-    booking.additional_service_charge = 0.00
-    booking.material_charge = 0.00
-    booking.final_amount = 239.00
-    booking.total_amount = 239.00
-    booking.worker_payout_amount = 199.00
-
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/work-completed",
-    response_model=BookingResponse,
-    summary="Worker marks work complete before Completion OTP",
-)
-@router.patch(
-    "/{booking_id}/work-completed",
-    response_model=BookingResponse,
-    summary="Worker marks work complete before Completion OTP",
-)
-def mark_work_completed(
-    booking_id: int,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    booking = db.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
-
-    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
-        raise HTTPException(status_code=403, detail="Cannot mark work complete for a booking assigned to another worker.")
-
-    now = datetime.now()
-    booking.work_completed_at = now
-    booking.status = "WORK_COMPLETED"
-    db.commit()
-    db.refresh(booking)
-    return _format_booking_response(booking)
-
-
-@router.post(
-    "/{booking_id}/verify-start",
-    response_model=VerifyStartOtpResponse,
-    summary="Validate Start PIN (4821) by booking ID URL param",
-)
-def verify_start_by_id(
-    booking_id: int,
-    payload: VerifyStartOtpRequest,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    payload.booking_id = booking_id
-    return verify_start_otp(payload, current_user, db)
-
-
-@router.post(
-    "/{booking_id}/verify-end",
-    response_model=VerifyEndOtpResponse,
-    summary="Validate End PIN (9134) by booking ID URL param",
-)
-def verify_end_by_id(
-    booking_id: int,
-    payload: VerifyEndOtpRequest,
-    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
-):
-    payload.booking_id = booking_id
-    return verify_end_otp(payload, current_user, db)
-
-
-# ─────────────────────────────────────────────────────────
-# DUAL-OTP STATE MACHINE & WELFARE DB ENDPOINTS (Slide 3)
-# ─────────────────────────────────────────────────────────
 
 @router.post(
     "/create",
@@ -1471,51 +953,573 @@ def verify_end_otp(
     )
 
 
+# ─────────────────────────────────────────────────────────
+# DYNAMIC / PARAMETERIZED BOOKING ENDPOINTS (/{booking_id}/...)
+# ─────────────────────────────────────────────────────────
+
 @router.get(
-    "/welfare-fund/summary",
-    response_model=WelfareMetricsResponse,
-    summary="Get Society Welfare Gullak Reserve Fund Summary (Slide 3 Welfare DB)",
+    "/{booking_id}",
+    response_model=BookingResponse,
+    summary="Get single booking by ID",
 )
-def get_welfare_fund_summary(
-    society_id: int = Query(1, description="Cooperative Society ID"),
+def get_booking(booking_id: int, db: Session = Depends(get_db)):
+    """Retrieve full booking details."""
+    booking = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.customer),
+            joinedload(Booking.worker),
+            joinedload(Booking.service),
+        )
+        .filter(Booking.booking_id == booking_id)
+        .first()
+    )
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/confirm",
+    response_model=BookingResponse,
+    summary="Confirm a pending booking by ID (POST)",
+)
+@router.patch(
+    "/{booking_id}/confirm",
+    response_model=BookingResponse,
+    summary="Confirm a pending booking by ID (PATCH)",
+)
+def confirm_booking_by_id(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """Customer or system confirms a booking."""
+    booking = (
+        db.query(Booking)
+        .options(
+            joinedload(Booking.customer),
+            joinedload(Booking.worker),
+            joinedload(Booking.service),
+        )
+        .filter(Booking.booking_id == booking_id)
+        .first()
+    )
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
+        raise HTTPException(status_code=403, detail="Cannot confirm another customer's booking.")
+
+    booking.status = "CONFIRMED"
+    booking.payment_status = "PENDING"
+    booking.start_otp = booking.start_otp or "4821"
+    booking.end_otp = booking.end_otp or "9134"
+    booking.amount = booking.amount or 239.00
+    booking.total_amount = booking.total_amount or 239.00
+    booking.final_amount = booking.final_amount or 239.00
+    booking.worker_payout_amount = booking.worker_payout_amount or 199.00
+    booking.platform_tech_fee = booking.platform_tech_fee or 30.00
+    booking.welfare_pool_fee = booking.welfare_pool_fee or 10.00
+    booking.warranty_active = False
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/accept",
+    response_model=BookingResponse,
+    summary="Worker accepts a pending booking (POST)",
+)
+@router.patch(
+    "/{booking_id}/accept",
+    response_model=BookingResponse,
+    summary="Worker accepts a pending booking (PATCH)",
+)
+def accept_booking(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """Worker accepts booking, automatically locking worker availability."""
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
+        raise HTTPException(status_code=403, detail="Cannot accept a booking assigned to another worker.")
+
+    _validate_booking_transition(booking.status, "ACCEPTED")
+    booking.status = "ACCEPTED"
+
+    # Toggle real-time availability to busy
+    avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
+    if avail:
+        avail.is_available = False
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/reject",
+    response_model=BookingResponse,
+    summary="Worker rejects a pending booking (POST)",
+)
+@router.patch(
+    "/{booking_id}/reject",
+    response_model=BookingResponse,
+    summary="Worker rejects a pending booking (PATCH)",
+)
+def reject_booking(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """Worker rejects pending booking."""
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
+        raise HTTPException(status_code=403, detail="Cannot reject a booking assigned to another worker.")
+
+    _validate_booking_transition(booking.status, "REJECTED")
+    booking.status = "REJECTED"
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/start",
+    response_model=BookingResponse,
+    summary="Worker starts work (POST)",
+)
+@router.patch(
+    "/{booking_id}/start",
+    response_model=BookingResponse,
+    summary="Worker starts work (PATCH)",
+)
+def start_booking(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """Worker starts active job execution."""
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
+        raise HTTPException(status_code=403, detail="Cannot start a booking assigned to another worker.")
+
+    _validate_booking_transition(booking.status, "IN_PROGRESS")
+    booking.status = "IN_PROGRESS"
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/complete",
+    response_model=BookingResponse,
+    summary="Complete a booking (Marks PAID & Frees Worker) (POST)",
+)
+@router.patch(
+    "/{booking_id}/complete",
+    response_model=BookingResponse,
+    summary="Complete a booking (Marks PAID & Frees Worker) (PATCH)",
+)
+def complete_booking(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """Marks booking as completed, marks payment paid, and frees up worker availability."""
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
+        raise HTTPException(status_code=403, detail="Cannot complete a booking assigned to another worker.")
+
+    _validate_booking_transition(booking.status, "COMPLETED")
+    booking.status = "COMPLETED"
+    booking.payment_status = "PAID"
+
+    # Free up worker
+    avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
+    if avail:
+        avail.is_available = True
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/cancel",
+    response_model=BookingResponse,
+    summary="Cancel a booking (POST)",
+)
+@router.patch(
+    "/{booking_id}/cancel",
+    response_model=BookingResponse,
+    summary="Cancel a booking (PATCH)",
+)
+def cancel_booking(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """Cancels PENDING or ACCEPTED booking. Frees worker if was accepted."""
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user:
+        if current_user.role == "customer" and current_user.id != booking.customer_id:
+            raise HTTPException(status_code=403, detail="Cannot cancel another customer's booking.")
+        if current_user.role == "worker" and current_user.id != booking.worker_id:
+            raise HTTPException(status_code=403, detail="Cannot cancel another worker's booking.")
+
+    _validate_booking_transition(booking.status, "CANCELLED")
+    was_accepted = booking.status == "ACCEPTED"
+    booking.status = "CANCELLED"
+
+    if was_accepted:
+        avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
+        if avail:
+            avail.is_available = True
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+# ─────────────────────────────────────────────────────────
+# RATE CARD & ON-SITE QUOTATION ENDPOINTS
+# ─────────────────────────────────────────────────────────
+
+@router.get(
+    "/{booking_id}/rate-card",
+    response_model=RateCardListResponse,
+    summary="Get trade-specific rate card items for a booking",
+)
+def get_booking_rate_card(
+    booking_id: int,
     db: Session = Depends(get_db),
 ):
     """
-    Queries cooperative_welfare_ledger for the specified society.
-    Aggregates total reserve balance (CREDIT - DEBIT) and count of contributions.
+    Fetches strictly the trade-specific rate card items belonging to the booking's skill.
+    Prevents skill-card mismatch (e.g. Painting job never sees MCB/Capacitor).
     """
-    credit_sum = (
-        db.query(func.coalesce(func.sum(CooperativeWelfareLedger.amount), 0.0))
-        .filter(
-            CooperativeWelfareLedger.society_id == society_id,
-            CooperativeWelfareLedger.entry_type == "CREDIT"
-        )
-        .scalar()
-    )
-    debit_sum = (
-        db.query(func.coalesce(func.sum(CooperativeWelfareLedger.amount), 0.0))
-        .filter(
-            CooperativeWelfareLedger.society_id == society_id,
-            CooperativeWelfareLedger.entry_type == "DEBIT"
-        )
-        .scalar()
-    )
-    total_balance = float(credit_sum) - float(debit_sum)
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
 
-    contributions_count = (
-        db.query(CooperativeWelfareLedger)
-        .filter(
-            CooperativeWelfareLedger.society_id == society_id,
-            CooperativeWelfareLedger.entry_type == "CREDIT"
-        )
-        .count()
+    service = booking.service or db.get(Service, booking.service_id)
+    skill_id = service.skill_id if service else 1
+    skill = db.get(Skill, skill_id)
+
+    items = (
+        db.query(RateCardItem)
+        .filter(RateCardItem.skill_id == skill_id, RateCardItem.is_active == True)
+        .order_by(RateCardItem.category, RateCardItem.item_name)
+        .all()
     )
 
-    return WelfareMetricsResponse(
-        society_id=society_id,
-        total_gullak_reserve=round(total_balance, 2),
-        total_contributions_count=contributions_count,
-        governing_body="Jabalpur District Cooperative Federation",
-        currency="INR",
-        last_updated=datetime.now(),
+    return RateCardListResponse(
+        skill_id=skill_id,
+        skill_name=skill.skill_name if skill else None,
+        service_id=service.service_id if service else None,
+        service_name=service.service_name if service else None,
+        items=[
+            RateCardItemResponse(
+                item_id=it.item_id,
+                skill_id=it.skill_id,
+                service_id=it.service_id,
+                item_name=it.item_name,
+                category=it.category,
+                unit_rate=float(it.unit_rate),
+                unit=it.unit,
+                description=it.description,
+                is_active=it.is_active,
+            )
+            for it in items
+        ],
     )
+
+
+@router.post(
+    "/{booking_id}/quotation",
+    response_model=QuotationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Worker submits on-site quotation for additional labor and parts",
+)
+def create_quotation(
+    booking_id: int,
+    payload: QuotationCreateRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Worker submits on-site quotation:
+    - Validates items belong to booking's skill category (rejects cross-trade items)
+    - Authoritative database pricing (rejects arbitrary frontend prices)
+    - Sets quotation to QUOTE_PENDING
+    """
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
+        raise HTTPException(status_code=403, detail="Cannot submit quotation for a booking assigned to another worker.")
+
+    service = booking.service or db.get(Service, booking.service_id)
+    skill_id = service.skill_id if service else 1
+
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Quotation must contain at least one item.")
+
+    labor_total = Decimal("0.00")
+    material_total = Decimal("0.00")
+    validated_items = []
+
+    for item_req in payload.items:
+        rc_item = db.get(RateCardItem, item_req.rate_card_item_id)
+        if not rc_item or not rc_item.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Rate card item {item_req.rate_card_item_id} not found or inactive.",
+            )
+        if rc_item.skill_id != skill_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Rate card item '{rc_item.item_name}' belongs to skill ID {rc_item.skill_id}, "
+                    f"which does not match booking trade skill ID {skill_id}."
+                ),
+            )
+        qty = max(1, item_req.quantity)
+        amt = Decimal(str(rc_item.unit_rate)) * qty
+        if rc_item.category.upper() == "LABOR":
+            labor_total += amt
+        else:
+            material_total += amt
+        validated_items.append((rc_item, qty, float(amt)))
+
+    total_add = labor_total + material_total
+    now = datetime.now()
+
+    quote = Quotation(
+        booking_id=booking_id,
+        worker_id=booking.worker_id,
+        status="QUOTE_PENDING",
+        additional_labor_charge=float(labor_total),
+        additional_material_charge=float(material_total),
+        total_additional_amount=float(total_add),
+        worker_notes=payload.worker_notes,
+        submitted_at=now,
+    )
+    db.add(quote)
+    db.flush()
+
+    for rc_item, qty, amt in validated_items:
+        qi = QuotationItem(
+            quotation_id=quote.quotation_id,
+            rate_card_item_id=rc_item.item_id,
+            item_name=rc_item.item_name,
+            category=rc_item.category,
+            unit_rate=float(rc_item.unit_rate),
+            quantity=qty,
+            total_amount=amt,
+        )
+        db.add(qi)
+
+    booking.quotation_status = "QUOTE_PENDING"
+    db.commit()
+    db.refresh(quote)
+    return _format_quotation_response(quote)
+
+
+@router.get(
+    "/{booking_id}/quotation",
+    response_model=Optional[QuotationResponse],
+    summary="Get latest quotation for a booking",
+)
+def get_booking_quotation(
+    booking_id: int,
+    db: Session = Depends(get_db),
+):
+    quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking_id)
+        .order_by(Quotation.quotation_id.desc())
+        .first()
+    )
+    if not quote:
+        return None
+    return _format_quotation_response(quote)
+
+
+@router.post(
+    "/{booking_id}/quotation/approve",
+    response_model=BookingResponse,
+    summary="Customer approves quotation",
+)
+def approve_quotation(
+    booking_id: int,
+    payload: Optional[QuotationApprovalRequest] = None,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
+        raise HTTPException(status_code=403, detail="Cannot approve quotation for another customer's booking.")
+
+    quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_PENDING")
+        .order_by(Quotation.quotation_id.desc())
+        .first()
+    )
+    if not quote:
+        raise HTTPException(status_code=404, detail="No pending quotation found for this booking.")
+
+    now = datetime.now()
+    quote.status = "QUOTE_APPROVED"
+    quote.approved_at = now
+    if payload and payload.customer_notes:
+        quote.customer_notes = payload.customer_notes
+
+    # Update booking with approved quotation amounts
+    base_charge = 239.00
+    total_additional = float(quote.total_additional_amount)
+    final_total = round(base_charge + total_additional, 2)
+
+    booking.quotation_status = "QUOTE_APPROVED"
+    booking.customer_approved_at = now
+    booking.additional_service_charge = float(quote.additional_labor_charge)
+    booking.material_charge = float(quote.additional_material_charge)
+    booking.final_amount = final_total
+    booking.total_amount = final_total
+    booking.worker_payout_amount = round(199.00 + float(quote.additional_labor_charge) + float(quote.additional_material_charge), 2)
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/quotation/reject",
+    response_model=BookingResponse,
+    summary="Customer rejects quotation",
+)
+def reject_quotation(
+    booking_id: int,
+    payload: Optional[QuotationRejectionRequest] = None,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
+        raise HTTPException(status_code=403, detail="Cannot reject quotation for another customer's booking.")
+
+    quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_PENDING")
+        .order_by(Quotation.quotation_id.desc())
+        .first()
+    )
+    if not quote:
+        raise HTTPException(status_code=404, detail="No pending quotation found for this booking.")
+
+    now = datetime.now()
+    quote.status = "QUOTE_REJECTED"
+    quote.rejected_at = now
+    if payload and payload.customer_notes:
+        quote.customer_notes = payload.customer_notes
+
+    booking.quotation_status = "QUOTE_REJECTED"
+    booking.additional_service_charge = 0.00
+    booking.material_charge = 0.00
+    booking.final_amount = 239.00
+    booking.total_amount = 239.00
+    booking.worker_payout_amount = 199.00
+
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/work-completed",
+    response_model=BookingResponse,
+    summary="Worker marks work complete before Completion OTP",
+)
+@router.patch(
+    "/{booking_id}/work-completed",
+    response_model=BookingResponse,
+    summary="Worker marks work complete before Completion OTP",
+)
+def mark_work_completed(
+    booking_id: int,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
+
+    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
+        raise HTTPException(status_code=403, detail="Cannot mark work complete for a booking assigned to another worker.")
+
+    now = datetime.now()
+    booking.work_completed_at = now
+    booking.status = "WORK_COMPLETED"
+    db.commit()
+    db.refresh(booking)
+    return _format_booking_response(booking)
+
+
+@router.post(
+    "/{booking_id}/verify-start",
+    response_model=VerifyStartOtpResponse,
+    summary="Validate Start PIN (4821) by booking ID URL param",
+)
+def verify_start_by_id(
+    booking_id: int,
+    payload: VerifyStartOtpRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    payload.booking_id = booking_id
+    return verify_start_otp(payload, current_user, db)
+
+
+@router.post(
+    "/{booking_id}/verify-end",
+    response_model=VerifyEndOtpResponse,
+    summary="Validate End PIN (9134) by booking ID URL param",
+)
+def verify_end_by_id(
+    booking_id: int,
+    payload: VerifyEndOtpRequest,
+    current_user: Optional[AuthUser] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    payload.booking_id = booking_id
+    return verify_end_otp(payload, current_user, db)
