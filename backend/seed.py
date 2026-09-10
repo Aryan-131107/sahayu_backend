@@ -26,50 +26,10 @@ def seed_database():
     print("  Sahayu Database Seeder (PostgreSQL / Supabase)")
     print("=" * 60)
     
-    # Ensure tables and columns exist without dropping existing schema
+    # Ensure tables exist without dropping existing schema
     try:
         Base.metadata.create_all(bind=engine)
-        with engine.connect() as conn:
-            conn.execute(text("""
-                -- Worker Data verification columns
-                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS shramik_id VARCHAR(50);
-                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS skill_certificate VARCHAR(255);
-                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS verification_status VARCHAR(20) NOT NULL DEFAULT 'VERIFIED';
-                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS verification_type VARCHAR(50) DEFAULT 'DEMO_SHRAMIK';
-                ALTER TABLE worker_data ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP;
-
-                -- Services is_active
-                ALTER TABLE services ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
-
-                -- Bookings columns for Dual-OTP, Pricing Breakdown, Quotation & Settlement Lifecycle
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS start_otp VARCHAR(6) DEFAULT '4821';
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS end_otp VARCHAR(6) DEFAULT '9134';
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS start_otp_attempts INT DEFAULT 0;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS end_otp_attempts INT DEFAULT 0;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_start_otp_locked BOOLEAN DEFAULT FALSE;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_end_otp_locked BOOLEAN DEFAULT FALSE;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS start_otp_verified_at TIMESTAMP;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS end_otp_verified_at TIMESTAMP;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS last_otp_attempt_at TIMESTAMP;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS worker_payout_amount NUMERIC(10, 2) DEFAULT 199.00;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS platform_tech_fee NUMERIC(10, 2) DEFAULT 30.00;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS welfare_pool_fee NUMERIC(10, 2) DEFAULT 10.00;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_amount NUMERIC(10, 2) DEFAULT 239.00;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS additional_service_charge NUMERIC(10, 2) DEFAULT 0.00;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS material_charge NUMERIC(10, 2) DEFAULT 0.00;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS final_amount NUMERIC(10, 2) DEFAULT 239.00;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS quotation_status VARCHAR(30) DEFAULT 'NONE';
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_approved_at TIMESTAMP;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS work_completed_at TIMESTAMP;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_reference VARCHAR(100);
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_completed_at TIMESTAMP;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS settled_at TIMESTAMP;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS warranty_active BOOLEAN DEFAULT FALSE;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS warranty_started_at TIMESTAMP;
-                ALTER TABLE bookings ADD COLUMN IF NOT EXISTS warranty_expires_at TIMESTAMP;
-            """))
-            conn.commit()
-        print("[OK] Verified database tables and extended columns exist.")
+        print("[OK] Verified database tables exist.")
     except Exception as e:
         print(f"[WARNING] Table verification warning: {e}")
 
@@ -181,12 +141,27 @@ def seed_database():
         # ─────────────────────────────────────────────────────
         print("[*] Checking & Seeding Trade-Specific Rate Card Items...")
         rate_cards_data = [
+            # Gardening / Lawn Care
+            ("Gardener", "Hedge Trimming & Pruning", "LABOR", 120.00, "unit", "Detailed hedge shaping, branch pruning and hedge line trimming"),
+            ("Gardener", "Lawn Aeration & Weeding", "LABOR", 180.00, "area", "Soil spike aeration, root weed removal, and moss clearing"),
+            ("Gardener", "Fertilizer & Soil Dressing", "MATERIAL", 150.00, "pack", "Organic NPK nutrient mix and topsoil conditioning"),
+            ("Gardener", "Debris & Leaf Bagging Removal", "LABOR", 100.00, "bag", "Green waste cleanup, leaf bagging and eco-disposal"),
+
             # Electrician
-            ("Electrician", "Ceiling Fan Capacitor Replacement", "MATERIAL", 80.00, "piece", "High-durability 2.5uF/3.15uF motor run capacitor"),
-            ("Electrician", "MCB Replacement 16A/32A", "MATERIAL", 150.00, "piece", "ISI marked single pole C-curve MCB switch"),
+            ("Electrician", "Capacitor Replacement", "MATERIAL", 150.00, "piece", "High-durability 2.5uF/3.15uF motor run capacitor"),
+            ("Electrician", "Motor Rewinding & Coil Repair", "LABOR", 350.00, "unit", "Complete copper coil rewinding and insulation varnishing"),
+            ("Electrician", "Modular Switch Replacement", "LABOR", 120.00, "piece", "Disassembly and installation of modular switch or 3-pin socket"),
+            ("Electrician", "MCB Breaker Replacement", "MATERIAL", 150.00, "piece", "ISI marked single pole C-curve MCB switch"),
             ("Electrician", "Additional Point Internal Wiring (per 5m)", "LABOR", 120.00, "point", "Concealed or casing-capping wiring extension per 5 meters"),
-            ("Electrician", "Modular Switch/Socket Replacement", "LABOR", 60.00, "piece", "Disassembly and installation of modular switch or 3-pin socket"),
             ("Electrician", "LED Tube/Bulb Holder Installation", "LABOR", 50.00, "unit", "Fixture assembly and bracket wall drilling"),
+
+            # Plumber
+            ("Plumber", "Tap Spindle Replacement", "LABOR", 120.00, "piece", "Removal of jammed spindle and brass/chrome tap fitting"),
+            ("Plumber", "Drain Trap Unclogging", "LABOR", 180.00, "point", "Mechanical snake unclogging and trap seal flush"),
+            ("Plumber", "Angle Valve / Bib Cock Replacement", "LABOR", 100.00, "piece", "Removal of jammed valve and brass/chrome tap fitting"),
+            ("Plumber", "CPVC Pipe Joint & Leak Seal (per joint)", "LABOR", 120.00, "joint", "Pipe cutting, solvent cement weld, and pressure testing"),
+            ("Plumber", "Flush Cistern Internal Mechanism Kit", "MATERIAL", 250.00, "kit", "Complete siphon, ball valve and dual flush valve kit"),
+            ("Plumber", "Teflon Tape & Sealant Pack", "MATERIAL", 40.00, "pack", "High-density thread seal tape and gasket compound"),
 
             # Painter
             ("Painter", "Wall Putty Patch & Crack Filling (per wall)", "LABOR", 150.00, "wall", "Scraping, acrylic wall putty application and smooth sanding"),
@@ -194,12 +169,6 @@ def seed_database():
             ("Painter", "Primer Coat Application (per room)", "LABOR", 250.00, "room", "Water-based wall interior primer sealer coat"),
             ("Painter", "Waterproofing Wall Sealant (per 10 sq.ft)", "MATERIAL", 320.00, "sq.ft", "Damp-proof elastomeric polymer coating"),
             ("Painter", "Door & Window Enamel Gloss Painting", "LABOR", 200.00, "unit", "Sanding, rust cleaning and double-coat synthetic enamel"),
-
-            # Plumber
-            ("Plumber", "Angle Valve / Bib Cock Replacement", "LABOR", 100.00, "piece", "Removal of jammed valve and brass/chrome tap fitting"),
-            ("Plumber", "CPVC Pipe Joint & Leak Seal (per joint)", "LABOR", 120.00, "joint", "Pipe cutting, solvent cement weld, and pressure testing"),
-            ("Plumber", "Flush Cistern Internal Mechanism Kit", "MATERIAL", 250.00, "kit", "Complete siphon, ball valve and dual flush valve kit"),
-            ("Plumber", "Teflon Tape & Sealant Pack", "MATERIAL", 40.00, "pack", "High-density thread seal tape and gasket compound"),
 
             # Carpenter
             ("Carpenter", "Hydraulic Hinge Replacement (Pair)", "MATERIAL", 180.00, "pair", "Soft-close hydraulic cabinet hinge with screws"),
@@ -303,7 +272,7 @@ def seed_database():
         workers_data = [
             ("Demo Worker", "9123456700", "worker@example.com", 8, 250.00, "Civil Lines, Jabalpur", "Jabalpur", 23.185000, 79.982000, True, True, "SHR-MP-2026-1001", "CERT-ITI-ELEC-2023", "VERIFIED", "BOTH", [("Electrician", "Expert", 8), ("AC Technician", "Expert", 6)]),
             ("Suresh Kumar", "9123456781", "suresh.kumar@example.com", 5, 300.00, "Wright Town, Jabalpur", "Jabalpur", 23.176000, 79.991000, True, True, "SHR-MP-2026-1002", None, "VERIFIED", "DEMO_SHRAMIK", [("Plumber", "Intermediate", 5)]),
-            ("Ramesh Patel", "9123456782", "ramesh.patel@example.com", 12, 400.00, "Napier Town, Jabalpur", "Jabalpur", 23.192000, 79.975000, True, True, "SHR-MP-2026-1003", None, "VERIFIED", "DEMO_SHRAMIK", [("Carpenter", "Expert", 12), ("Mason", "Expert", 10)]),
+            ("Ramesh Patel", "9123456782", "ramesh.patel@example.com", 12, 350.00, "Napier Town, Jabalpur", "Jabalpur", 23.192000, 79.975000, True, True, "SHR-MP-2026-1003", "CERT-GARD-2021", "VERIFIED", "DEMO_SHRAMIK", [("Gardener", "Expert", 12), ("Carpenter", "Intermediate", 6)]),
             ("Dinesh Yadav", "9123456783", "dinesh.yadav@example.com", 3, 200.00, "Vijay Nagar, Jabalpur", "Jabalpur", 23.165000, 80.002000, False, True, "SHR-MP-2026-1004", None, "PENDING", "DEMO_SHRAMIK", [("Painter", "Intermediate", 3)]),
             ("Manoj Tiwari", "9123456784", "manoj.tiwari@example.com", 6, 350.00, "Madan Mahal, Jabalpur", "Jabalpur", 23.201000, 79.968000, False, True, "SHR-MP-2026-1005", "CERT-APPL-2022", "REJECTED", "SKILL_CERTIFICATE", [("Appliance Repair", "Expert", 6), ("Electrician", "Intermediate", 4)]),
             ("Anita Devi", "9123456785", "anita.devi@example.com", 4, 250.00, "Gorakhpur, Jabalpur", "Jabalpur", 23.153000, 80.015000, True, True, "SHR-MP-2026-1006", None, "VERIFIED", "DEMO_SHRAMIK", [("House Cleaning", "Expert", 4)]),

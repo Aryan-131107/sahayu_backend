@@ -249,27 +249,17 @@ class AvailabilityResponse(BaseModel):
 # BOOKINGS SCHEMAS
 # ─────────────────────────────────────────────────────────
 
-from typing import List, Optional, Dict, Any, Union
-
 class BookingCreate(BaseModel):
     customer_id: Optional[int] = Field(None, examples=[1])
     worker_id: int = Field(..., examples=[1])
-    service_id: Optional[int] = Field(None, examples=[1])
-    booking_date: Optional[Union[date, str]] = Field(None, examples=["2026-08-28"])
-    start_time: Optional[Union[time, str]] = Field(None, examples=["10:00:00"])
+    service_id: int = Field(..., examples=[1])
+    booking_date: Optional[date] = Field(None, examples=["2026-08-28"])
+    start_time: Optional[time] = Field(None, examples=["10:00:00"])
     address: Optional[str] = Field(None, examples=["123 Civil Lines, Jabalpur"])
-    location: Optional[str] = Field(None, examples=["Civil Lines, Jabalpur"])
     description: Optional[str] = Field(None, examples=["Ceiling fan making squeaking noise"])
-    service_scope: Optional[str] = Field(None)
     service_lat: Optional[float] = Field(None, examples=[23.1815])
     service_lon: Optional[float] = Field(None, examples=[79.9864])
-    amount: Optional[float] = Field(239.00, gt=0, examples=[239.00])
-    estimated_price: Optional[float] = Field(None)
-    total_amount: Optional[float] = Field(None)
-    base_amount: Optional[float] = Field(None)
-    price: Optional[float] = Field(None)
-
-    model_config = ConfigDict(extra="ignore", from_attributes=True)
+    amount: float = Field(..., gt=0, examples=[250.00])
 
 
 # ── Dual-OTP & Slide 3 Transparent Pricing Schemas ─────────────────────
@@ -285,61 +275,33 @@ class BookingPricingBreakdown(BaseModel):
 class BookingCreateRequest(BaseModel):
     customer_id: Optional[int] = Field(None, description="Customer ID (auto-resolved from JWT if omitted)", examples=[1])
     worker_id: int = Field(..., description="Assigned gig worker ID", examples=[1])
-    service_id: Optional[int] = Field(None, description="Catalog service ID", examples=[1])
-    service_scope: Optional[str] = Field("Electrical Inspection & Fault Diagnosis", examples=["Electrical Inspection & Fault Diagnosis"])
-    location: Optional[str] = Field("Civil Lines, Jabalpur", examples=["Civil Lines, Jabalpur"])
-    booking_date: Optional[Union[date, str]] = Field(None, examples=["2026-09-05"])
-    start_time: Optional[Union[time, str]] = Field(None, examples=["10:00:00"])
+    service_id: Optional[int] = Field(1, description="Catalog service ID", examples=[1])
+    service_scope: str = Field("Electrical Inspection & Fault Diagnosis", examples=["Electrical Inspection & Fault Diagnosis"])
+    location: str = Field("Civil Lines, Jabalpur", examples=["Civil Lines, Jabalpur"])
+    booking_date: Optional[date] = Field(None, examples=["2026-09-05"])
+    start_time: Optional[time] = Field(None, examples=["10:00:00"])
     description: Optional[str] = Field(None, examples=["Electrical fault check and diagnostics"])
-    address: Optional[str] = Field(None)
-    amount: Optional[float] = Field(239.00)
-    estimated_price: Optional[float] = Field(None)
-    total_amount: Optional[float] = Field(None)
-    base_amount: Optional[float] = Field(None)
-    price: Optional[float] = Field(None)
-
-    model_config = ConfigDict(extra="ignore", from_attributes=True)
 
 
 class DualOtpBookingResponse(BaseModel):
     booking_id: int
     booking_reference: str
-    status: str = "CONFIRMED"
-    payment_status: str = "PENDING"
+    status: str
     customer_id: int
     worker_id: int
-    service_id: Optional[int] = None
-    service_scope: Optional[str] = None
-    service_name: Optional[str] = None
-    worker_name: Optional[str] = None
-    customer_name: Optional[str] = None
-    location: Optional[str] = None
-    address: Optional[str] = None
-    description: Optional[str] = None
-    booking_date: Optional[Union[date, str]] = None
-    start_time: Optional[Union[time, str]] = None
+    service_scope: str
+    location: str
     start_otp: str = "4821"
     end_otp: str = "9134"
-    completion_otp: str = "9134"
-    amount: float = 239.00
-    estimated_price: float = 239.00
-    base_amount: float = 239.00
-    total_amount: float = 239.00
-    final_amount: float = 239.00
-    worker_payout_amount: float = 199.00
-    platform_tech_fee: float = 30.00
-    welfare_pool_fee: float = 10.00
-    additional_service_charge: float = 0.00
-    material_charge: float = 0.00
-    quotation_status: str = "NONE"
-    pricing: Optional[BookingPricingBreakdown] = None
+    pricing: BookingPricingBreakdown
     warranty_active: bool = False
-    warranty_started_at: Optional[datetime] = None
     warranty_expires_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    worker_name: Optional[str] = None
+    customer_name: Optional[str] = None
     message: Optional[str] = None
 
-    model_config = ConfigDict(extra="ignore", from_attributes=True)
+    model_config = ConfigDict(from_attributes=True)
 
 
 class VerifyStartOtpRequest(BaseModel):
@@ -511,6 +473,16 @@ class DemoPaymentRequest(BaseModel):
     payment_method: str = "DEMO_UPI"
 
 
+class DemoResetRequest(BaseModel):
+    booking_id: Optional[int] = None
+    booking_reference: Optional[str] = None
+
+
+class CycleScenarioRequest(BaseModel):
+    scenario_index: Optional[int] = Field(None, ge=0, le=4, description="Scenario index (0 to 4)")
+    booking_id: Optional[int] = Field(None, description="Optional target booking ID to update in-place")
+
+
 class DemoResetResponse(BaseModel):
     success: bool = True
     message: str
@@ -518,6 +490,8 @@ class DemoResetResponse(BaseModel):
     status: str
     start_otp: str
     end_otp: str
+    completion_otp: Optional[str] = None
+    booking: Optional[Any] = None
 
 
 class BookingResponse(BaseModel):
@@ -526,35 +500,31 @@ class BookingResponse(BaseModel):
     customer_id: int
     worker_id: int
     service_id: int
-    booking_date: Optional[Union[date, str]] = None
-    start_time: Optional[Union[time, str]] = None
+    booking_date: Optional[date] = None
+    start_time: Optional[time] = None
     address: Optional[str] = None
-    location: Optional[str] = None
     description: Optional[str] = None
-    service_scope: Optional[str] = None
-    amount: float = 239.00
-    estimated_price: Optional[float] = 239.00
-    base_amount: Optional[float] = 239.00
+    amount: float
+    estimated_price: Optional[float] = None
     service_lat: Optional[float] = None
     service_lon: Optional[float] = None
-    status: str = "CONFIRMED"
-    payment_status: str = "PENDING"
-    start_otp: Optional[str] = "4821"
-    end_otp: Optional[str] = "9134"
-    completion_otp: Optional[str] = "9134"
+    status: str
+    payment_status: str
+    start_otp: Optional[str] = None
+    end_otp: Optional[str] = None
     start_otp_attempts: Optional[int] = 0
     end_otp_attempts: Optional[int] = 0
     is_start_otp_locked: Optional[bool] = False
     is_end_otp_locked: Optional[bool] = False
     start_otp_verified_at: Optional[datetime] = None
     end_otp_verified_at: Optional[datetime] = None
-    worker_payout_amount: Optional[float] = 199.00
-    platform_tech_fee: Optional[float] = 30.00
-    welfare_pool_fee: Optional[float] = 10.00
-    total_amount: Optional[float] = 239.00
+    worker_payout_amount: Optional[float] = None
+    platform_tech_fee: Optional[float] = None
+    welfare_pool_fee: Optional[float] = None
+    total_amount: Optional[float] = None
     additional_service_charge: Optional[float] = 0.00
     material_charge: Optional[float] = 0.00
-    final_amount: Optional[float] = 239.00
+    final_amount: Optional[float] = None
     quotation_status: Optional[str] = "NONE"
     customer_approved_at: Optional[datetime] = None
     work_completed_at: Optional[datetime] = None
@@ -568,11 +538,14 @@ class BookingResponse(BaseModel):
     worker_name: Optional[str] = None
     customer_name: Optional[str] = None
     service_name: Optional[str] = None
+    service_category: Optional[str] = None
+    category: Optional[str] = None
+    trade_skill: Optional[str] = None
+    worker_skill: Optional[str] = None
+    worker_trade_skill: Optional[str] = None
     latest_quotation: Optional[QuotationResponse] = None
-    pricing: Optional[BookingPricingBreakdown] = None
-    message: Optional[str] = None
 
-    model_config = ConfigDict(extra="ignore", from_attributes=True)
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────────────────

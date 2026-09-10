@@ -5,11 +5,9 @@ SIH 2026 Problem Statement 26089
 
 from contextlib import asynccontextmanager
 from typing import List
-from fastapi import FastAPI, Depends, APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-import traceback
 
 from app.core.config import settings
 from app.database import verify_connection, get_db
@@ -26,6 +24,7 @@ from app.routers import (
     matching,
     admin,
     payments,
+    voice,
 )
 
 
@@ -35,12 +34,6 @@ async def lifespan(app: FastAPI):
     try:
         pg_version = verify_connection()
         print(f"[OK] Database connected: {str(pg_version)[:60]}...")
-        try:
-            from seed import seed_database
-            seed_database()
-            print("[OK] Database tables, columns, and rate card items verified.")
-        except Exception as seed_err:
-            print(f"[WARNING] Database seed/migration notice on startup: {seed_err}")
     except Exception as e:
         print(f"[WARNING] Database connection on startup: {e}")
     yield
@@ -68,17 +61,6 @@ An explainable, transparent, and fair gig services recommendation system for hou
     lifespan=lifespan,
 )
 
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    tb = traceback.format_exc()
-    print(f"[UNHANDLED EXCEPTION on {request.method} {request.url.path}]: {tb}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal Server Error", "error": str(exc), "traceback": tb.splitlines()[-6:]}
-    )
-
-
 # ── CORS Middleware ──────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -102,6 +84,7 @@ api_router.include_router(reviews.router)
 api_router.include_router(matching.router)
 api_router.include_router(admin.router)
 api_router.include_router(payments.router)
+api_router.include_router(voice.router)
 
 
 @api_router.get("/skills", response_model=List[SkillResponse], tags=["Skills"], summary="List all skills (/api/skills)")
@@ -135,6 +118,7 @@ app.include_router(availability.router)
 app.include_router(matching.router)
 app.include_router(admin.router)
 app.include_router(payments.router)
+app.include_router(voice.router)
 
 
 @app.get("/skills", response_model=List[SkillResponse], tags=["Skills"], summary="List all skills")

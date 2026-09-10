@@ -272,6 +272,18 @@ class Booking(Base):
     warranty_expires_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
+    @property
+    def completion_otp(self) -> str:
+        return self.end_otp or "9134"
+
+    @completion_otp.setter
+    def completion_otp(self, value: str) -> None:
+        self.end_otp = value
+
+    @property
+    def booking_reference(self) -> str:
+        return f"SH-{self.booking_id:04d}"
+
     customer: Mapped["CustomerData"] = relationship("CustomerData", back_populates="bookings")
     worker: Mapped["WorkerData"] = relationship("WorkerData", back_populates="bookings")
     service: Mapped["Service"] = relationship("Service", back_populates="bookings")

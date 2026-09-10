@@ -43,6 +43,12 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8000"
     )
 
+    # ── Bhashini AI Configuration ───────────────────────────
+    BHASHINI_USER_ID: str = ""
+    BHASHINI_ULCA_API_KEY: str = ""
+    BHASHINI_PIPELINE_ID: str = "64392f96daac500b55c543cd"
+    BHASHINI_CONFIG_URL: str = "https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/getModelsPipeline"
+
     @field_validator("DATABASE_URL", mode="after")
     @classmethod
     def normalize_database_url(cls, v: str) -> str:

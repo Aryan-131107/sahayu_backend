@@ -29,11 +29,17 @@
 - `GET /bookings/customer/me` | Logged-in customer booking history | Query: `status_filter` | Resp: `[{booking_id, status, worker_name, amount, ...}]` | 200/401/403 | Auth: Customer
 - `GET /bookings/worker/me` | Logged-in worker incoming booking feed | Query: `status_filter` | Resp: `[{booking_id, status, customer_name, amount, ...}]` | 200/401/403 | Auth: Worker
 - `GET /bookings/{id}` | Get single booking details | Resp: `{booking_id, status, payment_status, ...}` | 200/404 | Auth: No
-- `PATCH /bookings/{id}/accept` | Accept pending booking | Resp: `{booking_id, status: "ACCEPTED"}` | 200/409 | Auth: Worker
-- `PATCH /bookings/{id}/reject` | Reject pending booking | Resp: `{booking_id, status: "REJECTED"}` | 200/409 | Auth: Worker
-- `PATCH /bookings/{id}/start` | Start accepted booking | Resp: `{booking_id, status: "IN_PROGRESS"}` | 200/409 | Auth: Worker
-- `PATCH /bookings/{id}/complete` | Mark complete & paid | Resp: `{booking_id, status: "COMPLETED", payment_status: "PAID"}` | 200/409 | Auth: Worker
-- `PATCH /bookings/{id}/cancel` | Cancel booking | Resp: `{booking_id, status: "CANCELLED"}` | 200/409 | Auth: Customer/Worker
+- `PATCH /bookings/{id}/accept` / `POST /bookings/{id}/accept` | Accept booking (with terminal override for demo) | Resp: `{booking_id, status: "ACCEPTED"}` | 200/409 | Auth: Worker
+- `PATCH /bookings/{id}/reject` / `POST /bookings/{id}/reject` | Reject pending booking | Resp: `{booking_id, status: "REJECTED"}` | 200/409 | Auth: Worker
+- `PATCH /bookings/{id}/start` / `POST /bookings/{id}/start` | Start accepted booking | Resp: `{booking_id, status: "IN_PROGRESS"}` | 200/409 | Auth: Worker
+- `PATCH /bookings/{id}/complete` / `POST /bookings/{id}/complete` | Mark complete & paid | Resp: `{booking_id, status: "COMPLETED", payment_status: "PAID"}` | 200/409 | Auth: Worker
+- `PATCH /bookings/{id}/cancel` / `POST /bookings/{id}/cancel` | Cancel booking | Resp: `{booking_id, status: "CANCELLED"}` | 200/409 | Auth: Customer/Worker
+- `PATCH /bookings/{id}/status` | Direct status update with demo bypass | Query: `status` | Resp: `{booking_id, status, ...}` | 200/409 | Auth: Optional
+- `GET /bookings/reference/{ref}` | Lookup booking by reference (e.g. SH-0058) | Resp: `{booking_id, ...}` | 200/404 | Auth: No
+- `POST /demo/reset` (or `POST /api/demo/reset`) | Forcefully reset active demo order (SH-0058) bypassing terminal locks | Body: `{[booking_id], [booking_reference]}` | Resp: `{success: true, message, booking_id, status: "ASSIGNED", start_otp: "4821", end_otp: "9134", booking: {...}}` | 200 | Auth: No
+- `POST /demo/cycle-scenario` (or `POST /api/demo/cycle-scenario`, `POST /demo/cycle`) | Rotates through 5 trade scenarios (0: Electrical, 1: Gardening, 2: Plumbing, 3: Carpentry, 4: HVAC) with clean state reset | Body/Query: `{[scenario_index: 0..4], [booking_id]}` | Resp: `BookingResponse` | 200 | Auth: No
+- `POST /demo/new-booking` (or `POST /api/demo/new-booking`) | Create a new randomized demo booking from pre-seeded service sets | Resp: `{booking_id, booking_reference, status: "ASSIGNED", payment_status: "UNPAID", start_otp: "4821", end_otp: "9134", ...}` | 201 | Auth: No
+- `POST /bookings/{id}/demo-pay` | Instant simulated UPI/Card payment & settlement | Body: `{booking_id, [payment_method]}` | Resp: `{success: true, payment_status: "paid", settlement_summary, warranty_active: true}` | 200 | Auth: No
 
 ## Reviews & System
 - `POST /reviews` | Submit 1-to-1 review for COMPLETED booking | Body: `{booking_id, [customer_id], rating: 1.0-5.0, review}` | Resp: `{review_id, rating, review}` | 201/400/409 | Auth: Customer
@@ -44,6 +50,11 @@
 ## Demo Shramik / e-Shram Worker Verification
 - `POST /workers/verify` | Submit worker for demo Shramik verification | Body: `{[worker_id], shramik_id, [skill], [skill_certificate], [verification_type]}` | Resp: `{worker_id, name, shramik_id, verification_status: "PENDING", ...}` | 200/400/409 | Auth: Worker (optional if worker_id passed)
 - `GET /workers/{id}/verification` | Get worker verification status | Resp: `{worker_id, name, shramik_id, verification_status, verified_at, is_verified}` | 200/404 | Auth: No
+
+## Bhashini AI Voice Assistant (Worker Dashboard)
+- `POST /voice/transcribe` (or `POST /api/voice/transcribe`) | Transcribe Hindi speech audio to text (Bhashini ASR) | Body: Multipart Form (`file: UploadFile`, `[language="hi"]`) | Resp: `{success: bool, [text]: str, [language]: "hi", [error]: str}` | 200 | Auth: No
+- `POST /voice/speak` (or `POST /api/voice/speak`) | Synthesize Hindi text into spoken audio (Bhashini TTS) | Body: `{text: str, [language="hi"], [gender="female"], [speed=1.0]}` | Resp: `{success: bool, [audio_base64]: str, [audio_format]: "wav", [mime_type]: "audio/wav", [data_url]: str, [error]: str}` | 200 | Auth: No
+- `GET /voice/status` (or `GET /api/voice/status`) | Diagnostic status of Bhashini voice module (no secrets leaked) | Resp: `{success: bool, is_configured: bool, supported_language: "hi", pipeline_id: str, cached_asr: bool, cached_tts: bool}` | 200 | Auth: No (Role: Admin)
 
 ## Admin Dashboard (Role: Admin)
 - `GET /admin/stats` | Platform aggregates (workers, customers, bookings, payments, fees, earnings) | Resp: `{total_workers, verified_workers, pending_workers, total_bookings, completed_bookings, total_customer_payments, total_worker_earnings, total_platform_fees, total_revenue}` | 200/401/403 | Auth: Admin
