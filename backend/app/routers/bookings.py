@@ -34,6 +34,7 @@ router = APIRouter(prefix="/bookings", tags=["Bookings"])
 VALID_TRANSITIONS = {
     "PENDING": ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "REJECTED", "CANCELLED"],
     "ASSIGNED": ["ACCEPTED", "IN_PROGRESS", "REJECTED", "CANCELLED", "PENDING"],
+    "CONFIRMED": ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "REJECTED", "CANCELLED", "PENDING"],
     "ACCEPTED": ["IN_PROGRESS", "CANCELLED", "WORK_COMPLETED"],
     "IN_PROGRESS": ["WORK_COMPLETED", "PAYMENT_PENDING", "COMPLETED", "CANCELLED"],
     "WORK_COMPLETED": ["PAYMENT_PENDING", "COMPLETED", "CANCELLED"],
@@ -613,6 +614,11 @@ def get_booking(booking_id: int, db: Session = Depends(get_db)):
     response_model=BookingResponse,
     summary="Worker accepts a pending booking",
 )
+@router.put(
+    "/{booking_id}/accept",
+    response_model=BookingResponse,
+    summary="Worker accepts a pending booking",
+)
 def accept_booking(
     booking_id: int,
     current_user: Optional[AuthUser] = Depends(get_optional_current_user),
@@ -623,8 +629,11 @@ def accept_booking(
     if not booking:
         raise HTTPException(status_code=404, detail=f"Booking {booking_id} not found.")
 
-    if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
-        raise HTTPException(status_code=403, detail="Cannot accept a booking assigned to another worker.")
+    if current_user and current_user.role == "worker":
+        if not booking.worker_id or booking.worker_id == 0:
+            booking.worker_id = current_user.id
+        elif booking.worker_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Cannot accept a booking assigned to another worker.")
 
     curr = str(booking.status or "").strip().upper()
     # Idempotent safe no-op if already accepted or currently in progress
@@ -635,9 +644,10 @@ def accept_booking(
     booking.status = "ACCEPTED"
 
     # Toggle real-time availability to busy
-    avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
-    if avail:
-        avail.is_available = False
+    if booking.worker_id:
+        avail = db.query(Availability).filter(Availability.worker_id == booking.worker_id).first()
+        if avail:
+            avail.is_available = False
 
     db.commit()
     db.refresh(booking)
@@ -650,6 +660,11 @@ def accept_booking(
     summary="Worker rejects a pending booking",
 )
 @router.post(
+    "/{booking_id}/reject",
+    response_model=BookingResponse,
+    summary="Worker rejects a pending booking",
+)
+@router.put(
     "/{booking_id}/reject",
     response_model=BookingResponse,
     summary="Worker rejects a pending booking",
@@ -689,6 +704,11 @@ def reject_booking(
     response_model=BookingResponse,
     summary="Worker starts work (IN_PROGRESS)",
 )
+@router.put(
+    "/{booking_id}/start",
+    response_model=BookingResponse,
+    summary="Worker starts work (IN_PROGRESS)",
+)
 def start_booking(
     booking_id: int,
     current_user: Optional[AuthUser] = Depends(get_optional_current_user),
@@ -720,6 +740,11 @@ def start_booking(
     summary="Complete a booking (Marks PAID & Frees Worker)",
 )
 @router.post(
+    "/{booking_id}/complete",
+    response_model=BookingResponse,
+    summary="Complete a booking (Marks PAID & Frees Worker)",
+)
+@router.put(
     "/{booking_id}/complete",
     response_model=BookingResponse,
     summary="Complete a booking (Marks PAID & Frees Worker)",
@@ -761,6 +786,11 @@ def complete_booking(
     summary="Cancel a booking",
 )
 @router.post(
+    "/{booking_id}/cancel",
+    response_model=BookingResponse,
+    summary="Cancel a booking",
+)
+@router.put(
     "/{booking_id}/cancel",
     response_model=BookingResponse,
     summary="Cancel a booking",

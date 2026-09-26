@@ -43,6 +43,13 @@ def _execute_settlement(
     - Credits ₹10.00 to CooperativeWelfareLedger (idempotent)
     - Frees worker availability
     """
+    status_upper = (booking.status or "").strip().upper()
+    if status_upper in ["PENDING", "ASSIGNED", "CONFIRMED", "CANCELLED", "REJECTED"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot process payment for booking in '{booking.status}' state. Service must be in progress or completed.",
+        )
+
     now = datetime.now()
     expires_at = now + timedelta(days=3)  # 72 Hours
 
@@ -54,18 +61,24 @@ def _execute_settlement(
     p_ref = payment_ref or f"PAY-SAHAYU-{booking.booking_id:04d}-{uuid.uuid4().hex[:6].upper()}"
     o_id = order_id or f"order_{uuid.uuid4().hex[:12]}"
 
-    # 1. Create PaymentRecord
-    record = PaymentRecord(
-        booking_id=booking.booking_id,
-        order_id=o_id,
-        payment_reference=p_ref,
-        amount=total_amt,
-        currency="INR",
-        payment_method=payment_method,
-        status="SUCCESS",
-        is_demo=True if "DEMO" in payment_method.upper() else False,
+    # 1. Idempotent PaymentRecord
+    record = (
+        db.query(PaymentRecord)
+        .filter(PaymentRecord.booking_id == booking.booking_id, PaymentRecord.status == "SUCCESS")
+        .first()
     )
-    db.add(record)
+    if not record:
+        record = PaymentRecord(
+            booking_id=booking.booking_id,
+            order_id=o_id,
+            payment_reference=p_ref,
+            amount=total_amt,
+            currency="INR",
+            payment_method=payment_method,
+            status="SUCCESS",
+            is_demo=True if "DEMO" in payment_method.upper() else False,
+        )
+        db.add(record)
 
     # 2. Update Booking
     booking.status = "COMPLETED"

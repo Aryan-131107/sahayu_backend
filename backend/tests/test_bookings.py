@@ -222,3 +222,54 @@ def test_invalid_state_transition_from_completed():
     resp = client.patch(f"/api/bookings/{b_id}/accept")
     assert resp.status_code == 409
     assert "Cannot transition" in resp.json()["detail"]
+
+
+def test_worker_accept_authorization_and_cross_worker_guard():
+    """Worker 1 cannot accept a booking assigned to Worker 2."""
+    from app.core.security import create_access_token
+    token1 = create_access_token({"sub": "1", "role": "worker", "email": "worker1@example.com"})
+    headers1 = {"Authorization": f"Bearer {token1}"}
+
+    token2 = create_access_token({"sub": "2", "role": "worker", "email": "worker2@example.com"})
+    headers2 = {"Authorization": f"Bearer {token2}"}
+
+    # Create booking for Worker 1
+    create_resp = client.post("/api/bookings", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_id": 1,
+        "booking_date": (date.today() + timedelta(days=40)).isoformat(),
+        "start_time": "10:00:00",
+        "amount": 250.00,
+    })
+    assert create_resp.status_code == 201
+    booking_id = create_resp.json()["booking_id"]
+
+    # Worker 2 tries to accept Worker 1's booking -> 403 Forbidden
+    resp_cross = client.patch(f"/api/bookings/{booking_id}/accept", headers=headers2)
+    assert resp_cross.status_code == 403
+    assert "assigned to another worker" in resp_cross.json()["detail"]
+
+    # Worker 1 accepts via PUT -> 200 OK
+    resp_accept = client.put(f"/api/bookings/{booking_id}/accept", headers=headers1)
+    assert resp_accept.status_code == 200
+    assert resp_accept.json()["status"] == "ACCEPTED"
+
+
+def test_payment_rejected_on_pending_booking():
+    """Payment cannot be processed on a booking that has not started / completed."""
+    create_resp = client.post("/api/bookings", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_id": 1,
+        "booking_date": (date.today() + timedelta(days=45)).isoformat(),
+        "start_time": "11:00:00",
+        "amount": 250.00,
+    })
+    booking_id = create_resp.json()["booking_id"]
+
+    # Try demo payment on PENDING booking -> 409 Conflict
+    pay_resp = client.post(f"/api/bookings/{booking_id}/demo-pay")
+    assert pay_resp.status_code == 409
+    assert "Cannot process payment" in pay_resp.json()["detail"]
+
