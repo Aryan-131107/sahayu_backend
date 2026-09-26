@@ -154,6 +154,8 @@ def create_payment_order(
 
     total_amt = float(booking.final_amount or booking.total_amount or booking.amount or 239.00)
     order_id = f"order_{uuid.uuid4().hex[:14]}"
+    ref = getattr(booking, "booking_reference", "") or f"SH-{booking.booking_id:04d}"
+    upi_qr = f"upi://pay?pa=sahayu.cooperative@sbi&pn=Sahayu+Gig+Services&am={total_amt:.2f}&cu=INR&tn=Booking+{ref}"
 
     return PaymentOrderResponse(
         order_id=order_id,
@@ -162,6 +164,10 @@ def create_payment_order(
         currency="INR",
         key_id="rzp_test_sahayu_demo",
         is_demo=True,
+        upi_qr_data=upi_qr,
+        qr_payload=upi_qr,
+        upi_id="sahayu.cooperative@sbi",
+        merchant_name="Sahāyu Gig Services Cooperative",
     )
 
 

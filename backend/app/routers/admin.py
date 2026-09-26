@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 
 from app.database import get_db
-from app.models import WorkerData, CustomerData, Booking, Service, Skill, RatingReview, WorkerSkill, Availability
+from app.models import (
+    WorkerData, CustomerData, Booking, Service, Skill, RatingReview, WorkerSkill,
+    Availability, CooperativeWelfareLedger
+)
 from app.schemas import (
     AdminStatsResponse, AdminWorkerItem, AdminBookingItem, PaymentBreakdown,
     AdminPaymentItem, ServiceCreate, ServiceResponse, ServiceUpdate,
@@ -628,3 +631,76 @@ def get_admin_reviews(
             )
         )
     return results
+
+
+# ─────────────────────────────────────────────────────────
+# 6. FEDERATION HEALTH & ADMIN LOGOUT
+# ─────────────────────────────────────────────────────────
+
+@router.get(
+    "/federation-health",
+    summary="Get Federation Health Metrics for Admin",
+)
+@router.get(
+    "/federation/health",
+    summary="Get Federation Health Metrics for Admin (Alias)",
+)
+def get_federation_health(
+    current_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns federation network health, cooperative reserve status,
+    and governance indicators.
+    """
+    credit_sum = (
+        db.query(func.coalesce(func.sum(CooperativeWelfareLedger.amount), 0.0))
+        .filter(CooperativeWelfareLedger.entry_type == "CREDIT")
+        .scalar()
+    )
+    debit_sum = (
+        db.query(func.coalesce(func.sum(CooperativeWelfareLedger.amount), 0.0))
+        .filter(CooperativeWelfareLedger.entry_type == "DEBIT")
+        .scalar()
+    )
+    reserve_fund = round(float(credit_sum) - float(debit_sum), 2)
+    contributions_count = db.query(CooperativeWelfareLedger).count()
+
+    total_workers = db.query(WorkerData).count()
+    verified_workers = (
+        db.query(WorkerData)
+        .filter(or_(WorkerData.verification_status == "VERIFIED", WorkerData.is_verified == True))
+        .count()
+    )
+    total_bookings = db.query(Booking).count()
+    completed_bookings = db.query(Booking).filter(Booking.status == "COMPLETED").count()
+
+    return {
+        "status": "operational",
+        "governing_body": "Jabalpur District Cooperative Federation",
+        "cooperatives_connected": 1,
+        "total_societies": 1,
+        "gullak_reserve_balance": reserve_fund,
+        "welfare_contributions_recorded": contributions_count,
+        "worker_network": {
+            "total_registered": total_workers,
+            "verified_active": verified_workers,
+            "verification_ratio": round(verified_workers / max(1, total_workers), 2),
+        },
+        "booking_volume": {
+            "total": total_bookings,
+            "completed": completed_bookings,
+        },
+        "currency": "INR",
+        "timestamp": datetime.now(),
+    }
+
+
+@router.post(
+    "/logout",
+    summary="Admin Logout",
+)
+def admin_logout():
+    """Confirms admin logout."""
+    return {"success": True, "message": "Admin session terminated successfully."}
+

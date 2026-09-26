@@ -1196,6 +1196,16 @@ def approve_quotation(
     if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
         raise HTTPException(status_code=403, detail="Cannot approve quotation for another customer's booking.")
 
+    # Idempotency check: if already approved, return current state
+    approved_quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_APPROVED")
+        .order_by(Quotation.quotation_id.desc())
+        .first()
+    )
+    if approved_quote and (booking.quotation_status or "").upper() == "QUOTE_APPROVED":
+        return _format_booking_response(booking)
+
     quote = (
         db.query(Quotation)
         .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_PENDING")
@@ -1203,6 +1213,8 @@ def approve_quotation(
         .first()
     )
     if not quote:
+        if approved_quote:
+            return _format_booking_response(booking)
         raise HTTPException(status_code=404, detail="No pending quotation found for this booking.")
 
     now = datetime.now()
@@ -1247,6 +1259,16 @@ def reject_quotation(
     if current_user and current_user.role == "customer" and current_user.id != booking.customer_id:
         raise HTTPException(status_code=403, detail="Cannot reject quotation for another customer's booking.")
 
+    # Idempotency check: if already rejected, return current state
+    rejected_quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_REJECTED")
+        .order_by(Quotation.quotation_id.desc())
+        .first()
+    )
+    if rejected_quote and (booking.quotation_status or "").upper() == "QUOTE_REJECTED":
+        return _format_booking_response(booking)
+
     quote = (
         db.query(Quotation)
         .filter(Quotation.booking_id == booking_id, Quotation.status == "QUOTE_PENDING")
@@ -1254,6 +1276,8 @@ def reject_quotation(
         .first()
     )
     if not quote:
+        if rejected_quote:
+            return _format_booking_response(booking)
         raise HTTPException(status_code=404, detail="No pending quotation found for this booking.")
 
     now = datetime.now()
@@ -1284,6 +1308,11 @@ def reject_quotation(
     response_model=BookingResponse,
     summary="Worker marks work complete before Completion OTP",
 )
+@router.put(
+    "/{booking_id}/work-completed",
+    response_model=BookingResponse,
+    summary="Worker marks work complete before Completion OTP",
+)
 def mark_work_completed(
     booking_id: int,
     current_user: Optional[AuthUser] = Depends(get_optional_current_user),
@@ -1295,6 +1324,13 @@ def mark_work_completed(
 
     if current_user and current_user.role == "worker" and current_user.id != booking.worker_id:
         raise HTTPException(status_code=403, detail="Cannot mark work complete for a booking assigned to another worker.")
+
+    # Guard: Cannot mark work complete if an add-on is currently pending approval
+    if (booking.quotation_status or "").upper() == "QUOTE_PENDING":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot mark work complete while additional work quotation is pending customer approval. Customer must approve or reject the quote first.",
+        )
 
     now = datetime.now()
     booking.work_completed_at = now
@@ -1563,6 +1599,18 @@ def verify_end_otp(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot verify End OTP on booking in '{booking.status}' state. Start OTP must be verified first.",
+        )
+
+    # Ensure no pending add-on quotation is blocking work completion
+    pending_quote = (
+        db.query(Quotation)
+        .filter(Quotation.booking_id == booking.booking_id, Quotation.status == "QUOTE_PENDING")
+        .first()
+    )
+    if pending_quote or (booking.quotation_status or "").upper() == "QUOTE_PENDING":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot verify Completion OTP while additional work quotation is pending customer approval. Customer must approve or reject the quote first.",
         )
 
     # Attempt limit & Lock check

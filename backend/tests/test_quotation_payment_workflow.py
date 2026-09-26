@@ -527,6 +527,136 @@ def test_12_demo_order_64_terminal_state_override_and_accept():
     assert re_accept.json()["status"] == "ACCEPTED"
 
 
+def test_13_pending_addon_blocks_completion_otp_until_approved():
+    """
+    Scenario 13: Pending Add-on blocks Completion OTP & Work Completed
+    - Booking in_progress
+    - Worker submits quotation -> status becomes QUOTE_PENDING
+    - Attempting verify-end-otp fails with HTTP 400 Bad Request
+    - Attempting work-completed fails with HTTP 400 Bad Request
+    - Customer Approves quotation -> status becomes QUOTE_APPROVED
+    - verify-end-otp now succeeds -> payment_pending
+    - Repeated approval is idempotent and succeeds
+    """
+    # 1. Create booking
+    create_resp = client.post("/api/bookings/create", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_scope": "Pipe Leakage Inspection",
+        "location": "Wright Town, Jabalpur",
+    })
+    assert create_resp.status_code == 201
+    booking_id = create_resp.json()["booking_id"]
+
+    # 2. Verify Start OTP
+    start_resp = client.post("/api/bookings/verify-start-otp", json={
+        "booking_id": booking_id,
+        "otp": "4821",
+    })
+    assert start_resp.status_code == 200
+    assert start_resp.json()["status"] == "in_progress"
+
+    # 3. Fetch rate card and worker creates quotation
+    rc_resp = client.get(f"/api/bookings/{booking_id}/rate-card")
+    assert rc_resp.status_code == 200
+    rc_items = rc_resp.json()["items"]
+    assert len(rc_items) > 0
+    item = rc_items[0]
+
+    quote_resp = client.post(f"/api/bookings/{booking_id}/quotation", json={
+        "items": [{"rate_card_item_id": item["item_id"], "quantity": 1}],
+        "worker_notes": "Replacement brass valve required",
+    })
+    assert quote_resp.status_code == 201
+    assert quote_resp.json()["status"] == "QUOTE_PENDING"
+
+    # 4. verify-end-otp MUST fail while quotation is pending approval
+    blocked_end_resp = client.post("/api/bookings/verify-end-otp", json={
+        "booking_id": booking_id,
+        "otp": "9134",
+    })
+    assert blocked_end_resp.status_code == 400
+    assert "Cannot verify Completion OTP while additional work quotation is pending" in blocked_end_resp.json()["detail"]
+
+    # 5. Customer approves quotation
+    approve_resp = client.post(f"/api/bookings/{booking_id}/quotation/approve", json={
+        "customer_id": 1,
+        "customer_notes": "Approved proceed with valve replacement",
+    })
+    assert approve_resp.status_code == 200
+    assert approve_resp.json()["quotation_status"] == "QUOTE_APPROVED"
+
+    # 6. Idempotent approval call returns 200 without duplication
+    idempotent_approve = client.post(f"/api/bookings/{booking_id}/quotation/approve", json={
+        "customer_id": 1,
+    })
+    assert idempotent_approve.status_code == 200
+    assert idempotent_approve.json()["quotation_status"] == "QUOTE_APPROVED"
+
+    # 7. verify-end-otp now succeeds
+    success_end_resp = client.post("/api/bookings/verify-end-otp", json={
+        "booking_id": booking_id,
+        "otp": "9134",
+    })
+    assert success_end_resp.status_code == 200
+    assert success_end_resp.json()["status"] == "payment_pending"
+
+
+def test_14_payment_order_qr_and_auth_admin_endpoints():
+    """
+    Scenario 14: Payment Order UPI QR generation, Auth & Admin Logout, and Federation Health
+    """
+    # 1. Create booking and transition to payment_pending
+    create_resp = client.post("/api/bookings/create", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_scope": "Switchboard Diagnostic",
+        "location": "Gorakhpur, Jabalpur",
+    })
+    assert create_resp.status_code == 201
+    booking_id = create_resp.json()["booking_id"]
+
+    # Start OTP -> in_progress -> End OTP -> payment_pending
+    client.post("/api/bookings/verify-start-otp", json={"booking_id": booking_id, "otp": "4821"})
+    client.post("/api/bookings/verify-end-otp", json={"booking_id": booking_id, "otp": "9134"})
+
+    # Create Payment Order
+    order_resp = client.post("/api/payments/create-order", json={
+        "booking_id": booking_id,
+        "customer_id": 1,
+        "payment_method": "UPI",
+    })
+    assert order_resp.status_code == 200
+    order_data = order_resp.json()
+    assert order_data["upi_qr_data"] is not None
+    assert "upi://pay" in order_data["upi_qr_data"]
+    assert order_data["upi_id"] == "sahayu.cooperative@sbi"
+
+    # Test Auth Logout
+    auth_logout = client.post("/api/auth/logout")
+    assert auth_logout.status_code == 200
+    assert auth_logout.json()["success"] is True
+
+    # Test Admin Logout
+    admin_logout = client.post("/api/admin/logout")
+    assert admin_logout.status_code == 200
+    assert admin_logout.json()["success"] is True
+
+    # Test Admin Federation Health
+    from app.core.security import create_access_token
+    admin_token = create_access_token(data={"sub": "1", "role": "admin", "email": "admin@sahayu.in"})
+    fed_resp = client.get(
+        "/api/admin/federation-health",
+        headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert fed_resp.status_code == 200
+    fed_data = fed_resp.json()
+    assert fed_data["status"] == "operational"
+    assert "gullak_reserve_balance" in fed_data
+    assert "worker_network" in fed_data
+
+
+
 
 
 

@@ -444,6 +444,10 @@ class PaymentOrderResponse(BaseModel):
     currency: str = "INR"
     key_id: Optional[str] = None
     is_demo: bool = True
+    upi_qr_data: Optional[str] = None
+    qr_payload: Optional[str] = None
+    upi_id: Optional[str] = "sahayu.cooperative@sbi"
+    merchant_name: Optional[str] = "Sahāyu Gig Services Cooperative"
 
 
 class PaymentVerifyRequest(BaseModel):

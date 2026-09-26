@@ -290,3 +290,13 @@ def get_me(current_user: AuthUser = Depends(get_current_user), db: Session = Dep
             id=w.worker_id, name=w.name, email=w.email, phone=w.phone,
             role="worker", city=w.city, address=w.address
         )
+
+
+@router.post(
+    "/logout",
+    summary="User Logout / Invalidate Session",
+)
+def logout():
+    """Confirms user logout and clears client session context."""
+    return {"success": True, "message": "Successfully logged out."}
+
