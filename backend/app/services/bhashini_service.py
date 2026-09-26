@@ -40,8 +40,18 @@ def clear_config_cache() -> None:
 
 def is_configured() -> bool:
     """Check if Bhashini credentials are configured in backend environment."""
-    user_id = (settings.BHASHINI_USER_ID or os.getenv("BHASHINI_USER_ID", "")).strip()
-    ulca_key = (settings.BHASHINI_ULCA_API_KEY or os.getenv("BHASHINI_ULCA_API_KEY", "")).strip()
+    user_id = (
+        getattr(settings, "BHASHINI_USER_ID", "")
+        or getattr(settings, "BHASHINI_UDYAT_KEY", "")
+        or os.getenv("BHASHINI_USER_ID", "")
+        or os.getenv("BHASHINI_UDYAT_KEY", "")
+    ).strip()
+    ulca_key = (
+        getattr(settings, "BHASHINI_ULCA_API_KEY", "")
+        or getattr(settings, "BHASHINI_INFERENCE_KEY", "")
+        or os.getenv("BHASHINI_ULCA_API_KEY", "")
+        or os.getenv("BHASHINI_INFERENCE_KEY", "")
+    ).strip()
     return bool(user_id and ulca_key)
 
 
@@ -123,8 +133,18 @@ async def fetch_pipeline_config(
     Extracts serviceId, callbackUrl, and inferenceApiKey.
     Caches result in-memory.
     """
-    user_id = (settings.BHASHINI_USER_ID or os.getenv("BHASHINI_USER_ID", "")).strip()
-    ulca_key = (settings.BHASHINI_ULCA_API_KEY or os.getenv("BHASHINI_ULCA_API_KEY", "")).strip()
+    user_id = (
+        getattr(settings, "BHASHINI_USER_ID", "")
+        or getattr(settings, "BHASHINI_UDYAT_KEY", "")
+        or os.getenv("BHASHINI_USER_ID", "")
+        or os.getenv("BHASHINI_UDYAT_KEY", "")
+    ).strip()
+    ulca_key = (
+        getattr(settings, "BHASHINI_ULCA_API_KEY", "")
+        or getattr(settings, "BHASHINI_INFERENCE_KEY", "")
+        or os.getenv("BHASHINI_ULCA_API_KEY", "")
+        or os.getenv("BHASHINI_INFERENCE_KEY", "")
+    ).strip()
     pipeline_id = (settings.BHASHINI_PIPELINE_ID or os.getenv("BHASHINI_PIPELINE_ID", "660fa5bec7fb5b0328229016")).strip()
     config_url = (settings.BHASHINI_CONFIG_URL or "https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/getModelsPipeline").strip()
 
