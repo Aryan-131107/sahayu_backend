@@ -273,6 +273,79 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         svc_cat = "PAINTING"
         trade_skill = "Cooperative Master Painter"
 
+    # ── OTP Lifecycle & Gating (Single Source of Truth) ───────────────────
+    is_start_verified = bool(b.start_otp_verified_at is not None)
+    is_end_verified = bool(b.end_otp_verified_at is not None)
+    quote_status = (b.quotation_status or "NONE").upper()
+
+    if is_start_verified:
+        start_otp_state = "VERIFIED"
+    elif b.is_start_otp_locked or (b.start_otp_attempts or 0) >= 3:
+        start_otp_state = "LOCKED"
+    else:
+        start_otp_state = "PENDING"
+
+    # End OTP Gating: Strictly suppress active PIN during pending add-on quotation
+    if is_end_verified:
+        end_otp_state = "VERIFIED"
+        can_verify_end = False
+        exposed_end_otp = b.end_otp or "9134"
+    elif quote_status == "QUOTE_PENDING":
+        end_otp_state = "BLOCKED_AWAITING_APPROVAL"
+        can_verify_end = False
+        exposed_end_otp = None
+    elif b.is_end_otp_locked or (b.end_otp_attempts or 0) >= 3:
+        end_otp_state = "LOCKED"
+        can_verify_end = False
+        exposed_end_otp = None
+    elif is_start_verified:
+        end_otp_state = "ELIGIBLE"
+        can_verify_end = True
+        exposed_end_otp = b.end_otp or "9134"
+    else:
+        end_otp_state = "AWAITING_START"
+        can_verify_end = False
+        exposed_end_otp = b.end_otp or "9134"
+
+    # ── Financial & Settlement Breakdown ──────────────────────────────────
+    initial_inspection = float(b.amount or 239.00)
+    worker_base = 199.00
+    tech_fee = float(b.platform_tech_fee or 30.00)
+    gullak_fee = float(b.welfare_pool_fee or 10.00)
+    add_labor = float(b.additional_service_charge or 0.00)
+    add_material = float(b.material_charge or 0.00)
+    total_add = round(add_labor + add_material, 2)
+    final_bill = float(b.final_amount or b.total_amount or (initial_inspection + total_add))
+    worker_total = float(b.worker_payout_amount or (worker_base + total_add))
+
+    is_settled_flag = bool(b.settled_at is not None and (b.status or "").upper() == "COMPLETED")
+    status_upper = (b.status or "").upper()
+    if is_settled_flag:
+        settlement_status_str = "SETTLED"
+    elif status_upper in ["PAYMENT_PENDING", "WORK_COMPLETED"]:
+        settlement_status_str = "PENDING_PAYMENT"
+    elif status_upper in ["IN_PROGRESS", "ACCEPTED", "PENDING", "ASSIGNED"]:
+        settlement_status_str = "NOT_READY"
+    else:
+        settlement_status_str = "NOT_APPLICABLE"
+
+    settlement_breakdown = {
+        "initial_inspection_amount": initial_inspection,
+        "worker_base_payout": worker_base,
+        "platform_tech_fee": tech_fee,
+        "welfare_pool_fee": gullak_fee,
+        "additional_labor_charge": add_labor,
+        "additional_material_charge": add_material,
+        "total_additional_amount": total_add,
+        "final_customer_bill": final_bill,
+        "worker_total_payout": worker_total,
+        "total_settled": final_bill,
+        "settlement_status": settlement_status_str,
+        "is_settled": is_settled_flag,
+        "settled_at": b.settled_at,
+        "currency": "INR",
+    }
+
     return BookingResponse(
         booking_id=b.booking_id,
         booking_reference=f"SH-{b.booking_id:04d}",
@@ -290,27 +363,27 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         status=b.status,
         payment_status=b.payment_status,
         start_otp=b.start_otp or "4821",
-        end_otp=b.end_otp or "9134",
+        end_otp=exposed_end_otp,
         start_otp_attempts=b.start_otp_attempts or 0,
         end_otp_attempts=b.end_otp_attempts or 0,
         is_start_otp_locked=bool(b.is_start_otp_locked),
         is_end_otp_locked=bool(b.is_end_otp_locked),
         start_otp_verified_at=b.start_otp_verified_at,
         end_otp_verified_at=b.end_otp_verified_at,
-        worker_payout_amount=float(b.worker_payout_amount) if b.worker_payout_amount is not None else 199.00,
-        platform_tech_fee=float(b.platform_tech_fee) if b.platform_tech_fee is not None else 30.00,
-        welfare_pool_fee=float(b.welfare_pool_fee) if b.welfare_pool_fee is not None else 10.00,
-        total_amount=float(b.total_amount) if b.total_amount is not None else amount_val,
-        additional_service_charge=float(b.additional_service_charge or 0.00),
-        material_charge=float(b.material_charge or 0.00),
-        final_amount=final_amt,
+        worker_payout_amount=worker_total,
+        platform_tech_fee=tech_fee,
+        welfare_pool_fee=gullak_fee,
+        total_amount=final_bill,
+        additional_service_charge=add_labor,
+        material_charge=add_material,
+        final_amount=final_bill,
         quotation_status=b.quotation_status or "NONE",
         customer_approved_at=b.customer_approved_at,
         work_completed_at=b.work_completed_at,
         payment_reference=b.payment_reference,
         payment_completed_at=b.payment_completed_at,
         settled_at=b.settled_at,
-        warranty_active=bool(b.warranty_active),
+        warranty_active=bool(b.warranty_active and (b.status or "").upper() == "COMPLETED" and b.payment_status == "PAID"),
         warranty_started_at=b.warranty_started_at,
         warranty_expires_at=b.warranty_expires_at,
         created_at=b.created_at,
@@ -323,6 +396,19 @@ def _format_booking_response(b: Booking) -> BookingResponse:
         worker_skill=trade_skill,
         worker_trade_skill=trade_skill,
         latest_quotation=latest_q,
+        is_start_otp_verified=is_start_verified,
+        is_end_otp_verified=is_end_verified,
+        start_otp_state=start_otp_state,
+        end_otp_state=end_otp_state,
+        can_verify_end_otp=can_verify_end,
+        initial_inspection_amount=initial_inspection,
+        worker_base_payout=worker_base,
+        total_additional_amount=total_add,
+        final_bill_amount=final_bill,
+        worker_total_payout=worker_total,
+        is_settled=is_settled_flag,
+        settlement_status=settlement_status_str,
+        settlement_breakdown=settlement_breakdown,
     )
 
 

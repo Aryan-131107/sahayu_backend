@@ -549,6 +549,23 @@ class BookingResponse(BaseModel):
     worker_trade_skill: Optional[str] = None
     latest_quotation: Optional[QuotationResponse] = None
 
+    # OTP Lifecycle & Gating Indicators (Single Source of Truth)
+    is_start_otp_verified: Optional[bool] = False
+    is_end_otp_verified: Optional[bool] = False
+    start_otp_state: Optional[str] = "PENDING"  # PENDING, VERIFIED, LOCKED
+    end_otp_state: Optional[str] = "AWAITING_START"  # AWAITING_START, BLOCKED_AWAITING_APPROVAL, ELIGIBLE, VERIFIED, LOCKED
+    can_verify_end_otp: Optional[bool] = False
+
+    # Financial & Settlement Breakdown
+    initial_inspection_amount: Optional[float] = 239.00
+    worker_base_payout: Optional[float] = 199.00
+    total_additional_amount: Optional[float] = 0.00
+    final_bill_amount: Optional[float] = 239.00
+    worker_total_payout: Optional[float] = 199.00
+    is_settled: Optional[bool] = False
+    settlement_status: Optional[str] = "NOT_READY"  # NOT_READY, PENDING_PAYMENT, SETTLED
+    settlement_breakdown: Optional[Dict[str, Any]] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 

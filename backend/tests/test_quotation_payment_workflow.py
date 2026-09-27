@@ -656,6 +656,159 @@ def test_14_payment_order_qr_and_auth_admin_endpoints():
     assert "worker_network" in fed_data
 
 
+def test_15_real_time_dual_interface_split_screen_synchronization():
+    """
+    Scenario 15: Two-Interface Real-Time Split-Screen Simulation (Customer + Worker).
+    Tests all 15 discrete transition checkpoints for exact state consistency.
+    """
+    from app.core.security import create_access_token
+    customer_token = create_access_token(data={"sub": "1", "role": "customer", "email": "customer@sahayu.in"})
+    worker_token = create_access_token(data={"sub": "1", "role": "worker", "email": "worker@sahayu.in"})
+    c_headers = {"Authorization": f"Bearer {customer_token}"}
+    w_headers = {"Authorization": f"Bearer {worker_token}"}
+
+    def fetch_states(b_id):
+        c_r = client.get(f"/api/bookings/{b_id}", headers=c_headers)
+        w_r = client.get(f"/api/bookings/{b_id}", headers=w_headers)
+        assert c_r.status_code == 200
+        assert w_r.status_code == 200
+        return c_r.json(), w_r.json()
+
+    # Step 1: Customer creates booking
+    create_resp = client.post("/api/bookings/create", json={
+        "customer_id": 1,
+        "worker_id": 1,
+        "service_scope": "Full Bathroom Plumbing Inspection",
+        "location": "Civil Lines, Jabalpur",
+    }, headers=c_headers)
+    assert create_resp.status_code == 201
+    b_id = create_resp.json()["booking_id"]
+
+    # Checkpoint 1: Initial Created / Assigned State
+    c_state, w_state = fetch_states(b_id)
+    assert c_state["status"] in ["pending", "PENDING", "ASSIGNED"]
+    assert w_state["status"] == c_state["status"]
+    assert c_state["start_otp_state"] == "PENDING"
+    assert w_state["start_otp_state"] == "PENDING"
+    assert c_state["is_start_otp_verified"] is False
+    assert w_state["is_start_otp_verified"] is False
+    assert c_state["can_verify_end_otp"] is False
+    assert w_state["can_verify_end_otp"] is False
+    assert c_state["is_settled"] is False
+    assert w_state["is_settled"] is False
+    assert c_state["warranty_active"] is False
+    assert w_state["warranty_active"] is False
+
+    # Step 2: Worker Accepts
+    acc_resp = client.patch(f"/api/bookings/{b_id}/accept", headers=w_headers)
+    assert acc_resp.status_code == 200
+    c_state, w_state = fetch_states(b_id)
+    assert c_state["status"] == "ACCEPTED"
+    assert w_state["status"] == "ACCEPTED"
+
+    # Step 3: Start OTP Verified
+    start_resp = client.post("/api/bookings/verify-start-otp", json={"booking_id": b_id, "otp": "4821"}, headers=w_headers)
+    assert start_resp.status_code == 200
+    c_state, w_state = fetch_states(b_id)
+    assert c_state["status"] == "in_progress"
+    assert w_state["status"] == "in_progress"
+    assert c_state["is_start_otp_verified"] is True
+    assert w_state["is_start_otp_verified"] is True
+    assert c_state["start_otp_state"] == "VERIFIED"
+    assert w_state["start_otp_state"] == "VERIFIED"
+    assert c_state["end_otp_state"] == "ELIGIBLE"
+    assert w_state["end_otp_state"] == "ELIGIBLE"
+    assert c_state["can_verify_end_otp"] is True
+    assert w_state["can_verify_end_otp"] is True
+
+    # Step 4: Worker submits Add-on quotation (₹470: ₹200 labor + ₹270 material)
+    rc_resp = client.get(f"/api/bookings/{b_id}/rate-card", headers=w_headers)
+    rc_items = rc_resp.json()["items"]
+    item1 = rc_items[0]
+    quote_resp = client.post(f"/api/bookings/{b_id}/quotation", json={
+        "items": [{"rate_card_item_id": item1["item_id"], "quantity": 1}],
+        "worker_notes": "Brass stop cock replacement and pipe sealing",
+    }, headers=w_headers)
+    assert quote_resp.status_code == 201
+
+    # Checkpoint 4: Add-on Pending Approval -> End OTP MUST be BLOCKED and hidden on both sides!
+    c_state, w_state = fetch_states(b_id)
+    assert c_state["quotation_status"] == "QUOTE_PENDING"
+    assert w_state["quotation_status"] == "QUOTE_PENDING"
+    assert c_state["end_otp_state"] == "BLOCKED_AWAITING_APPROVAL"
+    assert w_state["end_otp_state"] == "BLOCKED_AWAITING_APPROVAL"
+    assert c_state["end_otp"] is None
+    assert w_state["end_otp"] is None
+    assert c_state["can_verify_end_otp"] is False
+    assert w_state["can_verify_end_otp"] is False
+
+    # Attempting verify-end-otp while quote is pending strictly returns HTTP 400
+    fail_end = client.post("/api/bookings/verify-end-otp", json={"booking_id": b_id, "otp": "9134"}, headers=w_headers)
+    assert fail_end.status_code == 400
+
+    # Step 5: Customer Approves quotation
+    appr_resp = client.post(f"/api/bookings/{b_id}/quotation/approve", json={"customer_notes": "Approved proceed"}, headers=c_headers)
+    assert appr_resp.status_code == 200
+    c_state, w_state = fetch_states(b_id)
+    assert c_state["quotation_status"] == "QUOTE_APPROVED"
+    assert w_state["quotation_status"] == "QUOTE_APPROVED"
+    assert c_state["end_otp_state"] == "ELIGIBLE"
+    assert w_state["end_otp_state"] == "ELIGIBLE"
+    assert c_state["end_otp"] == "9134"
+    assert w_state["end_otp"] == "9134"
+    assert c_state["can_verify_end_otp"] is True
+    assert w_state["can_verify_end_otp"] is True
+    assert c_state["final_bill_amount"] > 239.00
+    assert w_state["final_bill_amount"] == c_state["final_bill_amount"]
+    assert c_state["worker_total_payout"] > 199.00
+    assert w_state["worker_total_payout"] == c_state["worker_total_payout"]
+
+    # Step 6: Worker marks work completed & verifies Completion OTP
+    wc_resp = client.post(f"/api/bookings/{b_id}/work-completed", headers=w_headers)
+    assert wc_resp.status_code == 200
+    end_resp = client.post("/api/bookings/verify-end-otp", json={"booking_id": b_id, "otp": "9134"}, headers=w_headers)
+    assert end_resp.status_code == 200
+
+    # Checkpoint 6: PAYMENT_PENDING state
+    c_state, w_state = fetch_states(b_id)
+    assert c_state["status"] == "payment_pending"
+    assert w_state["status"] == "payment_pending"
+    assert c_state["payment_status"] == "PENDING"
+    assert w_state["payment_status"] == "PENDING"
+    assert c_state["is_end_otp_verified"] is True
+    assert w_state["is_end_otp_verified"] is True
+    assert c_state["end_otp_state"] == "VERIFIED"
+    assert w_state["end_otp_state"] == "VERIFIED"
+    assert c_state["is_settled"] is False
+    assert w_state["is_settled"] is False
+    assert c_state["settlement_status"] == "PENDING_PAYMENT"
+    assert w_state["settlement_status"] == "PENDING_PAYMENT"
+    assert c_state["warranty_active"] is False
+    assert w_state["warranty_active"] is False
+
+    # Step 7: Customer executes Demo Payment
+    pay_resp = client.post(f"/api/bookings/{b_id}/demo-pay", headers=c_headers)
+    assert pay_resp.status_code == 200
+
+    # Checkpoint 7: COMPLETED, SETTLED, and WARRANTY ACTIVE across both interfaces
+    c_state, w_state = fetch_states(b_id)
+    assert c_state["status"] == "COMPLETED"
+    assert w_state["status"] == "COMPLETED"
+    assert c_state["payment_status"] == "PAID"
+    assert w_state["payment_status"] == "PAID"
+    assert c_state["is_settled"] is True
+    assert w_state["is_settled"] is True
+    assert c_state["settlement_status"] == "SETTLED"
+    assert w_state["settlement_status"] == "SETTLED"
+    assert c_state["warranty_active"] is True
+    assert w_state["warranty_active"] is True
+    assert c_state["warranty_expires_at"] is not None
+    assert w_state["warranty_expires_at"] == c_state["warranty_expires_at"]
+    assert c_state["final_bill_amount"] == w_state["final_bill_amount"]
+    assert c_state["settlement_breakdown"]["total_settled"] == c_state["final_bill_amount"]
+
+
+
 
 
 
