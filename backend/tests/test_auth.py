@@ -188,3 +188,113 @@ def test_customer_calling_workers_me_forbidden():
 
     resp = client.get("/workers/me", headers=headers)
     assert resp.status_code == 403
+
+
+def test_customer_logout_invalidates_session():
+    """
+    TEST 1-3: Customer Login -> protected API works -> Logout -> protected API rejected with 401.
+    """
+    # 1. Login
+    login_resp = client.post("/api/auth/login", json={
+        "email": "customer@example.com",
+        "password": "Password123!",
+    })
+    assert login_resp.status_code == 200
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. Access protected endpoint -> Success
+    me_resp = client.get("/api/customers/me", headers=headers)
+    assert me_resp.status_code == 200
+    assert me_resp.json()["email"] == "customer@example.com"
+
+    # 3. Repeat request (simulating page refresh / navigation) -> Still valid
+    me_resp2 = client.get("/api/auth/me", headers=headers)
+    assert me_resp2.status_code == 200
+
+    # 4. Logout
+    logout_resp = client.post("/api/auth/logout", headers=headers)
+    assert logout_resp.status_code == 200
+    assert logout_resp.json()["success"] is True
+
+    # 5. Old session token CANNOT access protected endpoint anymore -> 401 Unauthorized
+    after_logout_resp = client.get("/api/customers/me", headers=headers)
+    assert after_logout_resp.status_code == 401
+    assert "Session has been terminated" in after_logout_resp.json()["detail"] or "logged out" in after_logout_resp.json()["detail"]
+
+    after_logout_auth_me = client.get("/api/auth/me", headers=headers)
+    assert after_logout_auth_me.status_code == 401
+
+
+def test_worker_logout_invalidates_session():
+    """
+    TEST 6: Worker Login -> protected API works -> Logout -> protected API rejected with 401.
+    """
+    # 1. Login
+    login_resp = client.post("/api/auth/login", json={
+        "email": "worker@example.com",
+        "password": "Password123!",
+    })
+    assert login_resp.status_code == 200
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. Access protected endpoint -> Success
+    w_resp = client.get("/api/workers/me", headers=headers)
+    assert w_resp.status_code == 200
+    assert w_resp.json()["email"] == "worker@example.com"
+
+    # 3. Logout
+    logout_resp = client.post("/api/auth/logout", headers=headers)
+    assert logout_resp.status_code == 200
+    assert logout_resp.json()["success"] is True
+
+    # 4. Protected endpoint rejected
+    after_resp = client.get("/api/workers/me", headers=headers)
+    assert after_resp.status_code == 401
+
+
+def test_admin_logout_invalidates_session():
+    """
+    TEST 8: Admin Login -> protected admin API works -> Admin Logout -> protected API rejected with 401.
+    """
+    # 1. Login as Admin
+    login_resp = client.post("/api/auth/login", json={
+        "email": "admin@example.com",
+        "password": "Password123!",
+    })
+    assert login_resp.status_code == 200
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. Access protected admin endpoint
+    stats_resp = client.get("/api/admin/stats", headers=headers)
+    assert stats_resp.status_code == 200
+
+    # 3. Admin Logout via POST /api/admin/logout
+    admin_logout_resp = client.post("/api/admin/logout", headers=headers)
+    assert admin_logout_resp.status_code == 200
+    assert admin_logout_resp.json()["success"] is True
+
+    # 4. Protected admin endpoint rejected
+    after_stats = client.get("/api/admin/stats", headers=headers)
+    assert after_stats.status_code == 401
+
+
+def test_logout_with_json_payload_token():
+    """Logout passing token explicitly in JSON payload { "token": "..." }."""
+    login_resp = client.post("/api/auth/login", json={
+        "email": "customer@example.com",
+        "password": "Password123!",
+    })
+    assert login_resp.status_code == 200
+    token = login_resp.json()["access_token"]
+
+    # Logout with payload
+    logout_resp = client.post("/api/auth/logout", json={"token": token})
+    assert logout_resp.status_code == 200
+
+    # Verification that token is revoked
+    check_resp = client.get("/api/customers/me", headers={"Authorization": f"Bearer {token}"})
+    assert check_resp.status_code == 401
+

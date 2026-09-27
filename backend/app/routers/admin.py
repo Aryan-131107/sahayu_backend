@@ -20,7 +20,9 @@ from app.schemas import (
     AdminReviewItem, WorkerVerificationResponse, WorkerVerificationAction,
     WorkerStatusUpdate, WorkerSkillResponse, SkillResponse
 )
-from app.core.auth import require_admin, AuthUser
+from app.core.auth import require_admin, get_current_token, AuthUser
+from app.core.security import revoke_token
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/admin", tags=["Admin Dashboard"])
 
@@ -696,11 +698,25 @@ def get_federation_health(
     }
 
 
+class AdminLogoutPayload(BaseModel):
+    token: Optional[str] = None
+
+
 @router.post(
     "/logout",
     summary="Admin Logout",
 )
-def admin_logout():
-    """Confirms admin logout."""
-    return {"success": True, "message": "Admin session terminated successfully."}
+def admin_logout(
+    payload: Optional[AdminLogoutPayload] = None,
+    token: Optional[str] = Depends(get_current_token),
+):
+    """
+    Confirms admin logout and invalidates the active session / JWT access token.
+    After logout, the admin token can no longer access protected admin endpoints.
+    """
+    target_token = (payload.token if payload and payload.token else None) or token
+    if target_token:
+        revoke_token(target_token)
+    return {"success": True, "message": "Admin session terminated successfully. Session invalidated."}
+
 

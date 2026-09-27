@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorization
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, is_token_revoked
 from app.models import CustomerData, WorkerData, AdminUser
 
 # Token URL for swagger docs
@@ -43,12 +43,19 @@ def get_current_user(
 ) -> AuthUser:
     """
     Validate JWT token and return authenticated user object.
-    Raises 401 Unauthorized if token is missing or invalid.
+    Raises 401 Unauthorized if token is missing, revoked, or invalid.
     """
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required. Please provide a valid Bearer token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if is_token_revoked(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has been terminated / logged out. Please log in again.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

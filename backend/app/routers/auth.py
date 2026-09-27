@@ -5,13 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
+from typing import Optional
+from pydantic import BaseModel
 from app.database import get_db
 from app.models import CustomerData, WorkerData, AdminUser, Skill, WorkerSkill
 from app.schemas import (
     RegisterRequest, CustomerRegister, WorkerRegister, LoginRequest, TokenResponse, UserProfile
 )
-from app.core.security import get_password_hash, verify_password, create_access_token
-from app.core.auth import get_current_user, AuthUser
+from app.core.security import get_password_hash, verify_password, create_access_token, revoke_token
+from app.core.auth import get_current_user, get_current_token, AuthUser
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -292,11 +294,25 @@ def get_me(current_user: AuthUser = Depends(get_current_user), db: Session = Dep
         )
 
 
+class LogoutPayload(BaseModel):
+    token: Optional[str] = None
+
+
 @router.post(
     "/logout",
     summary="User Logout / Invalidate Session",
 )
-def logout():
-    """Confirms user logout and clears client session context."""
-    return {"success": True, "message": "Successfully logged out."}
+def logout(
+    payload: Optional[LogoutPayload] = None,
+    token: Optional[str] = Depends(get_current_token),
+):
+    """
+    Confirms user logout and invalidates the active session / JWT access token.
+    After logout, the token can no longer access protected endpoints.
+    """
+    target_token = (payload.token if payload and payload.token else None) or token
+    if target_token:
+        revoke_token(target_token)
+    return {"success": True, "message": "Successfully logged out. Session invalidated."}
+
 

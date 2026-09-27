@@ -53,3 +53,53 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
         return payload
     except jwt.PyJWTError:
         return None
+
+
+# ── Token Revocation / Logout Session Blacklist ─────────────────────────
+_revoked_tokens: Dict[str, datetime] = {}
+
+
+def revoke_token(token: str) -> bool:
+    """Revoke an active JWT access token to invalidate the session."""
+    if not token:
+        return False
+    token_clean = token.strip()
+    if token_clean.lower().startswith("bearer "):
+        token_clean = token_clean[7:].strip()
+    if not token_clean:
+        return False
+
+    payload = decode_access_token(token_clean)
+    if payload and "exp" in payload:
+        try:
+            exp_time = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+        except Exception:
+            exp_time = datetime.now(timezone.utc) + timedelta(days=7)
+    else:
+        exp_time = datetime.now(timezone.utc) + timedelta(days=7)
+
+    _revoked_tokens[token_clean] = exp_time
+
+    # Prune expired tokens periodically
+    now = datetime.now(timezone.utc)
+    expired_keys = [k for k, v in _revoked_tokens.items() if v < now]
+    for k in expired_keys:
+        _revoked_tokens.pop(k, None)
+
+    return True
+
+
+def is_token_revoked(token: str) -> bool:
+    """Check if a token has been revoked / logged out."""
+    if not token:
+        return False
+    token_clean = token.strip()
+    if token_clean.lower().startswith("bearer "):
+        token_clean = token_clean[7:].strip()
+    return token_clean in _revoked_tokens
+
+
+def clear_revoked_tokens() -> None:
+    """Clear revoked token store (used in test setup if needed)."""
+    _revoked_tokens.clear()
+
